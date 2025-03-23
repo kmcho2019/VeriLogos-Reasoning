@@ -1,0 +1,19 @@
+set gold __GOLD_RTL__
+set gate __GATE_RTL__
+set module_name __MODULE_NAME__
+
+set synopsys_auto_setup true
+
+read_verilog -container r -libname WORK -05 ${gold}
+
+set_top r:/WORK/${module_name}
+
+read_verilog -container i -libname WORK -05 ${gate}
+
+set_top i:/WORK/${module_name}
+
+match
+
+verify
+
+exit
