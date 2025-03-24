@@ -70,7 +70,7 @@ VeriLogos
 ```
 
 ## 👨‍👩‍👧‍👦 Developer
-*  **Kyungjun Min** ([microhumanis](https://github.com/97kjmin))
+*  **Kyungjun Min** ([97kjmin](https://github.com/97kjmin))
 *  **Seonghyeon Park** ([shypark98](https://github.com/shypark98))
 *  **Hyeonwoo Park** ([kangnam4123](https://github.com/kangnam4123))
-*  **Jinoh Cho** ([Jinoh-Cho](jinoma0927@gmail.com))
+*  **Jinoh Cho** ([Jinoh-Cho](https://github.com/Jinoh-Cho))
