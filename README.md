@@ -15,14 +15,6 @@
 - Fine-tune the model by integrating RL and EDA Tools. EDA tools evaluate the model-generated Verilog code and compute rewards based on syntax and functionality
 
 ## 💻 Getting Started
-### Docker Setting 
-```
-# Docker image download 
-docker pull 97kjmin/verilogos:1.0
-
-# Docker container build 
-docker run -it --name <name> --gpus '"device=<0,1,2...>"' --net host -v <path/to/local>:<path/to/docker> --shm-size='16gb' 97kjmin/verilogos:1.0 bash
-```
 ### Git 
 ```
 git clone https://github.com/97kjmin/VeriLogos.git
