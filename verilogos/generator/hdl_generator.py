@@ -12,7 +12,10 @@ _REGISTRY = {
     "openai":   ("https://api.openai.com/v1",      "OPENAI_API_KEY"),
     "groq":     ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "together": ("https://api.together.xyz/v1",    "TOGETHER_API_KEY"),
-    "fireworks":("https://api.fireworks.ai/v1",    "FIREWORKS_API_KEY")
+    "fireworks":("https://api.fireworks.ai/v1",    "FIREWORKS_API_KEY"),
+    "deepseek":("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+    "openrouter":("https://openrouter.ai/v1", "OPENROUTER_API_KEY"),
+    "gemini":("https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
 }
 
 def get_client(provider: str = "openai", **kw) -> OpenAI:
