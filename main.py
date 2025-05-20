@@ -24,8 +24,9 @@ if __name__ == '__main__':
     parser.add_argument("-if", "--input_file", type=str)
     parser.add_argument("-of", "--output_file", type=str)
     parser.add_argument("-it", "--iter", type=int)
-    parser.add_argument("--api_provider", type=str, choices=['together', 'fireworks', 'deepseek_api'], help="External API provider for synthetic trace generation") # New arg
-    parser.add_argument("--api_key", type=str, help="API key for the External LLM API provider") # New arg
+    parser.add_argument("-be", "--backend", type=str, default="hf", choices=["hf", "api"], help="Backend for model generation: Hugging Face or OpenAI")
+    parser.add_argument("-ap", "--api_provider", type=str, default="openai", choices=["openai", "together", "fireworks", "deepseek_api"], help="External API provider for synthetic trace generation") # New arg
+    parser.add_argument("--api_key", type=str, default=None, help="API key for the External LLM API provider") # New arg
     parser.add_argument("--reference_code_dir", type=str, help="Directory containing reference Verilog snippets for trace generation") # New arg
     parser.add_argument("--synthetic_traces_file", type=str, help="File to save/load synthetic reasoning traces") # New arg
 
@@ -55,7 +56,7 @@ if __name__ == '__main__':
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir)
     elif args.mode == "GEN_HDL":
-        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process)
+        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":
