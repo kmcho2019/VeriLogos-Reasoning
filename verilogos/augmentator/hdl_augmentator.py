@@ -4,9 +4,9 @@ import pandas as pd
 from pyverilog.vparser.parser import VerilogCodeParser
 from pyverilog.ast_code_generator.codegen import ASTCodeGenerator
 from pyverilog.vparser.ast import *
-from modification import visit_node_change, get_max_depth
-from insertion import visit_node_insertion
-from deletion import collect_names, count_identifier_usages, find_missing_elements, find_and_remove_parameters, visit_node_delete
+from .modification import visit_node_change, get_max_depth
+from .insertion import visit_node_insertion
+from .deletion import collect_names, count_identifier_usages, find_missing_elements, find_and_remove_parameters, visit_node_delete
 from multiprocessing import Pool
 from tqdm import tqdm
 
