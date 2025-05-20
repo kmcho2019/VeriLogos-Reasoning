@@ -71,10 +71,22 @@ def gen_hdl(
             pretrained_path, padding_side="left",
             trust_remote_code=True, cache_dir=cache_dir
         )
+        # Ensure the tokenizer has a pad_token if it's missing
+        if tok.pad_token is None:
+            tok.pad_token = tok.eos_token
+
         net = AutoModelForCausalLM.from_pretrained(
             pretrained_path, torch_dtype="auto",
             device_map="auto", cache_dir=cache_dir
         )
+
+        # Apply chat template to create 'formatted_messages' column
+        ds = ds.map(
+            lambda x: {"formatted_messages": tok.apply_chat_template(
+                x["messages"], tokenize=False, add_generation_prompt=True
+            )}
+        )
+
         pipe = transformers.pipeline(
             task="text-generation",
             model=net,
@@ -91,11 +103,10 @@ def gen_hdl(
             return_full_text=False
         )
 
-        for mod, out in zip(modules,
-                            pipe(KeyDataset(ds, "formatted_messages"),
-                                 **gen_args)):
+        for i, out in tqdm(enumerate(pipe(KeyDataset(ds, "formatted_messages"), **gen_args)), total=len(ds)):
+            module_name = modules[i] # Get corresponding module name
             code = out[0]["generated_text"]
-            _dump(code, exp_dir, model, mod, idx_code)
+            _dump(code, exp_dir, model, module_name, idx_code)
 
     # ───────────────────────────────────  Back-end - OpenAI  ───────────────────
     elif backend == "api":
