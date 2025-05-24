@@ -13,7 +13,7 @@ _REGISTRY = {
     "groq":     ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "together": ("https://api.together.xyz/v1",    "TOGETHER_API_KEY"),
     "fireworks":("https://api.fireworks.ai/v1",    "FIREWORKS_API_KEY"),
-    "deepseek":("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+    "deepseek":("https://api.deepseek.com", "DEEPSEEK_API_KEY"),
     "openrouter":("https://openrouter.ai/v1", "OPENROUTER_API_KEY"),
     "gemini":("https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
 }
@@ -118,13 +118,30 @@ def gen_hdl(
                       "content": "You are a helpful Verilog code generator."}
 
         for mod, msgs in tqdm(zip(modules, prompts), total=len(modules)):
-            rsp = client.chat.completions.create(
-                model=model,
-                messages=[sys_prompt, *msgs, {"role": "assistant", "content": ""}],
-                max_tokens=4096, temperature=1.0, top_p=1.0,
-            )
+            if model == "deepseek-reasoner":
+                # Due to error:
+                # Error code: 400 - {'error': {'message': 'deepseek-reasoner does not support successive user or assistant messages (messages[2] and messages[3] in your input). You should interleave the user/assistant messages in the message sequence.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_request_error'}}
+                rsp = client.chat.completions.create(
+                    model=model,
+                    messages=[sys_prompt, *msgs],
+                    max_tokens=4096, temperature=1.0, top_p=1.0,
+                )
+            else:            
+                rsp = client.chat.completions.create(
+                    model=model,
+                    messages=[sys_prompt, *msgs, {"role": "assistant", "content": ""}],
+                    max_tokens=4096, temperature=1.0, top_p=1.0,
+                )
+            
+
             code = rsp.choices[0].message.content
             _dump(code, exp_dir, model, mod, idx_code)
+            if model == "deepseek-reasoner":
+                # Save the reasoning trace
+                trace = rsp.choices[0].message.reasoning_content
+                trace_path = f"{exp_dir}/{model}/{mod}/gen_{mod}_{idx_code}_trace.txt"
+                with open(trace_path, "w") as trace_file:
+                    trace_file.write(trace)
     else:
         raise ValueError("backend must be 'hf' or 'api'")
 

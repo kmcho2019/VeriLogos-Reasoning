@@ -110,7 +110,7 @@ def find_root_node(G):
     else:
         return None
 
-def process_row(row, system_prompt, mode, method):
+def process_row(row, system_prompt, mode, method, add_name):
     code = row["code"].strip()
 
     if method == "module":
@@ -129,7 +129,9 @@ def process_row(row, system_prompt, mode, method):
         blank = blank_token(code)
         user_prompt = f"{command_1}\n\n```verilog\n{blank}\n```\n\n{command_2}"
     elif method == "logic":
-        blank, target = blank_logic(f'/VeriLogos_V2/data/code/{row.name}.v')
+        # blank, target = blank_logic(f'/VeriLogos_V2/data/code/{row.name}.v')
+        # blank, target = blank_logic(code)
+        blank, target = blank_logic(f'./data/code/{row.name}.v')
         command_1 = f"The given Verilog code has the logic related to the module's output, '{target}', left blank as [BLANK]."
         command_2 = "Consider the module's logic and fill in all the [BLANK] parts to complete a syntactically and functionally correct Verilog code."
         if blank is None:
@@ -163,9 +165,11 @@ def process_row(row, system_prompt, mode, method):
         return {"messages": messages, "name": row["name"]}
     if mode == "RLTF":
         return {"messages": messages, "index": row.name}
+    if add_name is not None:
+        return {"messages": messages, "name": row["name"]}
     return {"messages": messages}
 
-def gen_jsonl(mode, input_path, output_path, method="desc", num_workers=64):
+def gen_jsonl(mode, input_path, output_path, method="desc", add_name=None, num_workers=64):
     if not input_path.endswith('.csv'):
         raise("Error: input_path must be a CSV file.")
 
@@ -174,7 +178,7 @@ def gen_jsonl(mode, input_path, output_path, method="desc", num_workers=64):
     with open('./ref/system.prompt', 'r') as f:
         system_prompt = f.read()
 
-    process_row_partial = partial(process_row, system_prompt=system_prompt, mode=mode, method=method)
+    process_row_partial = partial(process_row, system_prompt=system_prompt, mode=mode, method=method, add_name=add_name)
 
     with mp.Pool(num_workers) as pool:
         data_list = pool.map(process_row_partial, [row for _, row in df.iterrows()])

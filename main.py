@@ -12,7 +12,7 @@ if __name__ == '__main__':
     Argument
     """
     parser = argparse.ArgumentParser(description="Improving LLM-based Verilog Code Generation with Data Augmentation and RL")
-    parser.add_argument("mode", choices=['AUG', 'SFT', 'RLTF', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SYNTHETIC_TRACES', 'FINETUNE_VERILOG_COMPLETION'])
+    parser.add_argument("mode", choices=['AUG', 'SFT', 'RLTF', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_SYNTHETIC_TRACES', 'FINETUNE_VERILOG_COMPLETION'])
     parser.add_argument("-im", "--input_model", type=str)
     parser.add_argument("-om", "--output_model", type=str)
     parser.add_argument("-d", "--data_jsonl", type=str)
@@ -26,9 +26,10 @@ if __name__ == '__main__':
     parser.add_argument("-it", "--iter", type=int)
     parser.add_argument("-be", "--backend", type=str, default="hf", choices=["hf", "api"], help="Backend for model generation: Hugging Face or OpenAI")
     parser.add_argument("-ap", "--api_provider", type=str, default="openai", choices=["openai", "together", "fireworks", "deepseek", "openrouter", "gemini"], help="External API provider for synthetic trace generation") # New arg
-    parser.add_argument("--api_key", type=str, default=None, help="API key for the External LLM API provider") # New arg
+    parser.add_argument("-ak", "--api_key", type=str, default=None, help="API key for the External LLM API provider") # New arg
     parser.add_argument("--reference_code_dir", type=str, help="Directory containing reference Verilog snippets for trace generation") # New arg
     parser.add_argument("--synthetic_traces_file", type=str, help="File to save/load synthetic reasoning traces") # New arg
+    parser.add_argument("-jm", "--jsonl_method", type=str, default=None, choices=["module", "sentence", "token", "logic", "evaluation"], help="Method for generating JSONL files (either determines masking method or evaluation mode)") # New arg
 
     args = parser.parse_args()
 
@@ -61,6 +62,12 @@ if __name__ == '__main__':
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":
         gen_jsonl("RLTF", args.input_file, args.output_file)
+    elif args.mode == "GEN_SFT_CUSTOM_JSONL":
+        if args.jsonl_method is None:
+            raise ValueError("jsonl_method must be specified for GEN_SFT_CUSTOM_JSONL mode.")
+        if args.jsonl_method not in ["module", "sentence", "token", "logic", "evaluation"]:
+            raise ValueError("jsonl_method must be one of ['module', 'sentence', 'token', 'logic', 'evaluation'].")
+        gen_jsonl("SFT", args.input_file, args.output_file, method=args.jsonl_method, add_name=True)
     elif args.mode == "GEN_SYNTHETIC_TRACES":
         print(f"Mode {args.mode} selected. Placeholder for generating synthetic traces.")
         # Ensure new directory exists
