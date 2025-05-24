@@ -30,7 +30,7 @@ if __name__ == '__main__':
     parser.add_argument("--reference_code_dir", type=str, help="Directory containing reference Verilog snippets for trace generation") # New arg
     parser.add_argument("--synthetic_traces_file", type=str, help="File to save/load synthetic reasoning traces") # New arg
     parser.add_argument("-jm", "--jsonl_method", type=str, default=None, choices=["module", "sentence", "token", "logic", "evaluation"], help="Method for generating JSONL files (either determines masking method or evaluation mode)") # New arg
-    parser.add_argument("-rg", "--resume_gneration", action='store_true', help="Resume hdl generation from the last generated module file") # New arg
+    parser.add_argument("-rg", "--resume_generation", action='store_true', help="Resume hdl generation from the last generated module file") # New arg
     parser.add_argument("-bi", "--batch_inference", action='store_true', help="Use batch inference (uses package llm-deluge) for faster HDL generation when using external APIs, might cause high credit use") # New arg
 
     args = parser.parse_args()
@@ -59,7 +59,7 @@ if __name__ == '__main__':
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir)
     elif args.mode == "GEN_HDL":
-        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_gneration, args.batch_inference)
+        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, args.batch_inference)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":
