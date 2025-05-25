@@ -70,6 +70,8 @@ def gen_hdl(
     # If resuming generation, check if the directory already exists
     # If it does, filter out modules that have already been generated
     # Generation is only excluded for modules with matching idx_code
+    original_input_modules_num = len(modules)
+    print(f"[GEN_HDL]: Total modules to process: {original_input_modules_num}")
     if resume_generation:
         existing_modules = set()
         for i, module_name in enumerate(modules):
@@ -94,7 +96,9 @@ def gen_hdl(
                 
         # Filter out modules that have already been generated
         modules = [mod for mod in modules if mod not in existing_modules]
+        # Try to say out of total number of modules in file x number of modules seems to be already generated
         print(f"[GEN_HDL]: Resuming generation, skipping {len(existing_modules)} already generated modules.")
+        print(f"[GEN_HDL]: Remaining modules to process: {len(modules)}")
     else:
         for msg_list in prompts:
             system_prompt_content = None
@@ -164,7 +168,7 @@ def gen_hdl(
     # ───────────────────────────────────  Back-end - OpenAI  ───────────────────
     elif backend == "api":
         if batch_inference is True:
-            DELUGE_BATCH_SIZE = 200
+            DELUGE_BATCH_SIZE = 50
             deluge_client = LLMClient(model_names=[model], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000,max_concurrent_requests=1_000, sampling_params=SamplingParams(
                 temperature=1.0, top_p=1.0, max_new_tokens=4096))
             deluge_prompts = []
@@ -180,13 +184,16 @@ def gen_hdl(
             num_prompts_to_process = len(deluge_prompts)
             # Process the prompts in batches
             deluge_prompts = [deluge_prompts[i:i + DELUGE_BATCH_SIZE] for i in range(0, num_prompts_to_process, DELUGE_BATCH_SIZE)]
+            batch_module_names = [modules[i:i + DELUGE_BATCH_SIZE] for i in range(0, num_prompts_to_process, DELUGE_BATCH_SIZE)]
             print(f"[GEN_HDL]: Total batches to process: {len(deluge_prompts)}")
             for idx, batch in enumerate(deluge_prompts):
                 print(f"[GEN_HDL]: Processing batch {idx + 1}/{len(deluge_prompts)} with {len(batch)} prompts.")
+                # Print current range of modules being processed
+                print(f"[GEN_HDL]: Processing modules {idx * DELUGE_BATCH_SIZE} to {(idx + 1) * DELUGE_BATCH_SIZE - 1} of {num_prompts_to_process}.")
                 responses = deluge_client.process_prompts_sync(batch, show_progress=True)
                 # Save the responses
-                for i, rsp in enumerate(responses):
-                    module_name = modules[i]
+                for j, rsp in enumerate(responses):
+                    module_name = batch_module_names[idx][j]
                     code = rsp.completion
                     thinking = rsp.thinking
                     # Check for errors by checking if the response is None
