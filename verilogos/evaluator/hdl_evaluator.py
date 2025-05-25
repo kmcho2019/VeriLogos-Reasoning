@@ -40,7 +40,7 @@ def calculate_pass_at_k(scores, k, mode='functionality'):
 
     return pass_at_k
 
-def evaluate(model, num_code, data_dir, exp_dir, source_list = ['RTLLM', 'VerilogEval']):
+def evaluate(model, num_code, data_dir, exp_dir, source_list = ['RTLLM', 'VerilogEval'], parse_module_name_from_content=False):
     print(f'[EVAL]: Evaluating {model} with {source_list}...')
 
     tasks = []
@@ -53,14 +53,14 @@ def evaluate(model, num_code, data_dir, exp_dir, source_list = ['RTLLM', 'Verilo
                 if not os.path.isfile(gen_rtl):
                     continue
 
-                tasks.append((model, module, source, i, data_dir, exp_dir, work_dir))
+                tasks.append((model, module, source, i, data_dir, exp_dir, work_dir, parse_module_name_from_content))
 
     with Pool(30) as pool:
         pool.map(evaluate_code_wrapper, tasks)
 
     write_report(model, data_dir, exp_dir, source_list, num_code)
 
-def evaluate_code(model, module, module_source, module_idx, data_dir, exp_dir, work_dir):
+def evaluate_code(model, module, module_source, module_idx, data_dir, exp_dir, work_dir, parse_module_name_from_content):
     os.makedirs(work_dir, exist_ok=True)
 
     gen_rtl = f'{exp_dir}/{model}/{module}/gen_{module}_{module_idx}.v'
@@ -74,6 +74,15 @@ def evaluate_code(model, module, module_source, module_idx, data_dir, exp_dir, w
     with open(gen_rtl, 'w') as f:
         f.write(gen_content)
 
+    # If the module name does not match the file name, we need to parse it
+    # and use it for functionality checking
+    if parse_module_name_from_content:
+        match = re.search(r"^\s*module\s+([a-zA-Z_][a-zA-Z0-9_]*)", gen_content, re.MULTILINE)
+        if match:
+            module = match.group(1)
+        else:
+            print(f"Warning: Could not parse module name from content in {gen_rtl}. Using original module name {module}.")
+
     if check_syntax(gen_rtl) == Status.FAIL:
         score = -1
     elif check_functionality(gen_rtl, gol_rtl, module, work_dir) == Status.FAIL:
@@ -85,8 +94,8 @@ def evaluate_code(model, module, module_source, module_idx, data_dir, exp_dir, w
         f.write(f'{score}')
 
 def evaluate_code_wrapper(args):
-    model, module, source, i, data_dir, exp_dir, work_dir = args
-    evaluate_code(model, module, source, i, data_dir, exp_dir, work_dir)
+    model, module, source, i, data_dir, exp_dir, work_dir, parse_module_name_from_content = args
+    evaluate_code(model, module, source, i, data_dir, exp_dir, work_dir, parse_module_name_from_content)
 
 def write_report(model, data_dir, exp_dir, source_list, num_code):
     module_results = []

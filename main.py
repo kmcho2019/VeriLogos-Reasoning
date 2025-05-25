@@ -32,6 +32,11 @@ if __name__ == '__main__':
     parser.add_argument("-jm", "--jsonl_method", type=str, default=None, choices=["module", "sentence", "token", "logic", "evaluation"], help="Method for generating JSONL files (either determines masking method or evaluation mode)") # New arg
     parser.add_argument("-rg", "--resume_generation", action='store_true', help="Resume hdl generation from the last generated module file") # New arg
     parser.add_argument("-bi", "--batch_inference", action='store_true', help="Use batch inference (uses package llm-deluge) for faster HDL generation when using external APIs, might cause high credit use") # New arg
+    parser.add_argument("-es", "--eval_source_list", type=str, nargs='+', default=['RTLLM', 'VerilogEval'], help="List of sources to evaluate against (default: ['RTLLM', 'VerilogEval'])")
+    parser.add_argument("-ep", "--eval-parse-module-name",
+                        action='store_true', # Makes it a boolean flag, default is False
+                        help="For EVAL mode, parse the module name directly from Verilog file content instead of deriving it from the filename.")
+
 
     args = parser.parse_args()
 
@@ -57,7 +62,7 @@ if __name__ == '__main__':
     elif args.mode == "RLTF":
         rltf(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir)
     elif args.mode == "EVAL":
-        evaluate(args.input_model, num_code, data_dir, exp_dir)
+        evaluate(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
     elif args.mode == "GEN_HDL":
         gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, args.batch_inference)
     elif args.mode == "GEN_SFT_JSONL":
