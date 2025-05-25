@@ -13,6 +13,9 @@ from pyverilog.vparser.ast import *
 from pyverilog.vparser.parser import VerilogCodeParser
 from verilogos.utils.parser import parse_module_decl_cont
 
+import json
+from pathlib import Path
+
 ### Adjust it to fit your model ### 
 tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/deepseek-coder-6.7b-instruct")
 
@@ -191,6 +194,153 @@ def gen_jsonl(mode, input_path, output_path, method="desc", add_name=None, num_w
     dataset.to_json(output_path)
 
     print(f"[GEN_{mode}_JSONL]: Generated {output_path} with {input_path}...")
+
+def gen_reasoning_jsonl(input_jsonl_path: str, output_dir_path: str, output_file_path: str):
+    """
+    Generates a JSONL file for fine-tuning reasoning models for RTL LLM generation.
+
+    Args:
+        input_jsonl_path (str): Path to the input JSONL file containing initial prompts. (Example: "./data/jsonl/initial_prompts.jsonl")
+        output_dir_path (str): Path to the base directory containing model outputs
+                                (scores, Verilog files, trace files). (Example: "./exp/deepseek-r1)
+        output_file_path (str): Path to save the generated fine-tuning JSONL file.
+    """
+    input_p = Path(input_jsonl_path)
+    output_base_p = Path(output_dir_path)
+    output_jsonl_p = Path(output_file_path)
+
+    if not input_p.exists():
+        print(f"Error: Input JSONL file not found: {input_jsonl_path}")
+        return
+    if not output_base_p.is_dir():
+        print(f"Error: Output directory not found: {output_dir_path}")
+        return
+
+    processed_count = 0
+    skipped_count = 0
+
+    with open(output_jsonl_p, 'w', encoding='utf-8') as outfile:
+        with open(input_p, 'r', encoding='utf-8') as infile:
+            for line_num, line in enumerate(infile):
+                try:
+                    problem_data = json.loads(line)
+                except json.JSONDecodeError:
+                    print(f"Warning: Skipping malformed JSON line {line_num + 1} in {input_jsonl_path}")
+                    continue
+
+                module_id_original = problem_data.get("name")
+                if module_id_original is None:
+                    # If module_id is not present, use the index as a fallback
+                    module_id_original = line_num
+                    print(f"Warning: No 'name' field found in {line_num}th line, using index {line_num} as module_id.")
+                    #print(f"Warning: Skipping line {line_num + 1} due to missing 'name' (module_id).")
+                    #continue
+                
+                module_id_str = str(module_id_original) # Ensure string for path construction
+                
+                system_prompt = ""
+                user_prompt = ""
+                if "messages" in problem_data and isinstance(problem_data["messages"], list):
+                    for msg in problem_data["messages"]:
+                        if msg.get("role") == "system":
+                            system_prompt = msg.get("content", "")
+                        elif msg.get("role") == "user":
+                            user_prompt = msg.get("content", "")
+                
+                if not system_prompt or not user_prompt:
+                    print(f"Warning: Skipping module {module_id_str} due to missing system or user prompt.")
+                    skipped_count += 1
+                    continue
+
+                module_output_path = output_base_p / module_id_str
+                if not module_output_path.is_dir():
+                    # print(f"Info: Module directory not found for {module_id_str}, skipping.")
+                    skipped_count += 1
+                    continue
+
+                found_valid_iteration = False
+                best_trace_content = ""
+                best_verilog_content = ""
+
+                # Iterate over potential generation_iter_num subdirectories
+                iter_num_dirs = [d for d in module_output_path.iterdir() if d.is_dir()]
+                
+                # Sort iter_num_dirs by name (e.g., "0", "1", "10") to process in order
+                # This helps if multiple iterations have score 1.0, we pick the "earliest"
+                iter_num_dirs.sort(key=lambda x: x.name)
+
+
+                for iter_dir in iter_num_dirs:
+                    generation_iter_num = iter_dir.name # This is the string like "0", "1", etc.
+                    
+                    highest_score_for_this_iter = -float('inf')
+                    score_files = list(iter_dir.glob("*.score"))
+
+                    if not score_files:
+                        # print(f"Debug: No score files in {iter_dir} for module {module_id_str}")
+                        continue
+                    
+                    for score_file in score_files:
+                        try:
+                            with open(score_file, 'r', encoding='utf-8') as sf:
+                                score_str = sf.read().strip()
+                                score = float(score_str)
+                                if score > highest_score_for_this_iter:
+                                    highest_score_for_this_iter = score
+                        except ValueError:
+                            print(f"Warning: Could not parse score in {score_file} for module {module_id_str}, iter {generation_iter_num}.")
+                        except Exception as e:
+                            print(f"Warning: Error reading score file {score_file}: {e}")
+                    
+                    if highest_score_for_this_iter == 1.0:
+                        # Found a valid iteration for this module_id
+                        # Paths for trace and verilog are in the parent module_output_path
+                        trace_file_path = module_output_path / f"gen_{module_id_original}_{generation_iter_num}_trace.txt"
+                        verilog_file_path = module_output_path / f"gen_{module_id_original}_{generation_iter_num}.v"
+                        
+                        if trace_file_path.exists() and verilog_file_path.exists():
+                            try:
+                                with open(trace_file_path, 'r', encoding='utf-8') as tf:
+                                    best_trace_content = tf.read()
+                                with open(verilog_file_path, 'r', encoding='utf-8') as vf:
+                                    best_verilog_content = vf.read()
+                                
+                                found_valid_iteration = True
+                                # print(f"Debug: Found valid iteration {generation_iter_num} for module {module_id_str}")
+                                break # Stop checking other iterations for this module_id
+                            except Exception as e:
+                                print(f"Warning: Error reading trace/Verilog for module {module_id_str}, iter {generation_iter_num}: {e}")
+                                # Continue to check other iterations if this one had file read errors
+                        else:
+                            print(f"Warning: Score 1.0 found for module {module_id_str}, iter {generation_iter_num}, but trace or Verilog file missing.")
+                            print(f"  Trace expected: {trace_file_path}")
+                            print(f"  Verilog expected: {verilog_file_path}")
+                            # Continue to check other iterations
+
+                if found_valid_iteration:
+                    assistant_content = f"<think>\n{best_trace_content.strip()}\n</think>\n{best_verilog_content.strip()}"
+                    
+                    output_entry = {
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                            {"role": "assistant", "content": assistant_content}
+                        ]
+                    }
+                    # Optionally, you might want to include the module name/id in the output for reference
+                    # output_entry["name"] = module_id_original 
+
+                    outfile.write(json.dumps(output_entry) + "\n")
+                    processed_count += 1
+                else:
+                    # print(f"Info: No iteration with score 1.0 found for module {module_id_str}, skipping.")
+                    skipped_count += 1
+    
+    print(f"\n[GEN_REASONING_JSONL]: Processing complete.")
+    print(f"[GEN_REASONING_JSONL]: Generated fine-tuning data for {processed_count} modules.")
+    print(f"[GEN_REASONING_JSONL]: Skipped {skipped_count} modules.")
+    print(f"[GEN_REASONING_JSONL]: Output saved to: {output_jsonl_p.resolve()}")
+
 
 def track_identifier_relations(node, G):
     if isinstance(node, (BlockingSubstitution, NonblockingSubstitution, Assign)):
