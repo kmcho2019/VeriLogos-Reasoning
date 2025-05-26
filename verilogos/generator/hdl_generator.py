@@ -47,6 +47,7 @@ def gen_hdl(
     resume_generation=False,# checks save directory for existing files and resumes generation
     batch_inference=False,  # Use lm-deluge for batch inference (API backend)
     hf_batch_size=1,        # Batch size for Hugging Face local inference
+    force_thinking=False,   # Force thinking for Hugging Face local inference (specific models, eg. DeepSeek-R1-Distill)
     **provider_kw,
 ):
     """
@@ -140,7 +141,7 @@ def gen_hdl(
     # ───────────────────────────────────────  Back-end - HF  ───────────────────
     if backend == "hf":
         print(f"[GEN_HDL - HF]: Processing {len(modules_to_process_names)} modules with Hugging Face backend.")
-        print(f"[GEN_HDL]: Hugging Face Batch Size: {hf_batch_size}")
+        print(f"[GEN_HDL - HF]: Hugging Face Batch Size: {hf_batch_size}")
         if not ds_for_hf: # Check if the dataset for HF is empty after filtering
             print("[GEN_HDL - HF]: No data to process for Hugging Face backend after filtering. Exiting.")
             return
@@ -184,6 +185,32 @@ def gen_hdl(
             eos_token_id=tok.eos_token_id, # Explicitly set eos_token_id
             pad_token_id=tok.pad_token_id  # Explicitly set pad_token_id
         )
+
+        # If the model is a reasoning model, we might want to force it to start with "<think>"
+        # This is particularly useful for models like DeepSeek-R1-Distill series.
+        # This is a specific feature for models that support reasoning and thinking.
+        # If force_thinking is True, we will ensure that the generation starts with "<think>".
+        if force_thinking:
+            think_token_str = "<think>"
+            try:
+                think_token_ids = tok.encode(think_token_str, add_special_tokens=False)
+                if think_token_ids:
+                    # `forced_decoder_ids` expects a list of tuples: (index_in_generation, token_id)
+                    # Index 0 is the first token generated, 1 is the second, and so on.
+                    forced_ids_list = []
+                    for i, token_id in enumerate(think_token_ids):
+                        forced_ids_list.append((i, token_id))
+                    
+                    gen_args["forced_decoder_ids"] = forced_ids_list
+                    print(f"[GEN_HDL - HF]: Forcing generation to start with '{think_token_str}' (token_ids: {think_token_ids}).")
+                    # Optional: Adjust max_new_tokens if the forced prefix is very long,
+                    # though for "<think>" it's likely not an issue.
+                    # gen_args["max_new_tokens"] = gen_args.get("max_new_tokens", 4096) + len(think_token_ids)
+                else:
+                    print(f"[GEN_HDL - HF]: Warning: Tokenizer encoded '{think_token_str}' to an empty list. Cannot force prefix.")
+            except Exception as e:
+                print(f"[GEN_HDL - HF]: Warning: Error encoding '{think_token_str}': {e}. Cannot force prefix.")
+
         print(f"[GEN_HDL - HF]: Starting generation for {len(ds_for_hf_formatted)} prompts with batch size {hf_batch_size}.")
         for i, out in tqdm(enumerate(pipe(KeyDataset(ds_for_hf_formatted, "formatted_messages"), **gen_args)), total=len(ds_for_hf_formatted)):
             module_name = modules_to_process_names[i] # Aligned with ds_for_hf_formatted
