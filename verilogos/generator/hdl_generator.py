@@ -199,9 +199,10 @@ def gen_hdl(
                     # Index 0 is the first token generated, 1 is the second, and so on.
                     forced_ids_list = []
                     for i, token_id in enumerate(think_token_ids):
-                        forced_ids_list.append((i, token_id))
+                        forced_ids_list.append([i, token_id])
                     
-                    gen_args["forced_decoder_ids"] = forced_ids_list
+                    net.config.forced_decoder_ids = forced_ids_list
+                    #gen_args["forced_decoder_ids"] = forced_ids_list
                     print(f"[GEN_HDL - HF]: Forcing generation to start with '{think_token_str}' (token_ids: {think_token_ids}).")
                     # Optional: Adjust max_new_tokens if the forced prefix is very long,
                     # though for "<think>" it's likely not an issue.
