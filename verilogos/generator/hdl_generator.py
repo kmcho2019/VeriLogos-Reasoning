@@ -48,6 +48,7 @@ def gen_hdl(
     batch_inference=False,  # Use lm-deluge for batch inference (API backend)
     hf_batch_size=1,        # Batch size for Hugging Face local inference
     force_thinking=False,   # Force thinking for Hugging Face local inference (specific models, eg. DeepSeek-R1-Distill)
+    temperature=1.0,        # Temperature for model generation
     **provider_kw,
 ):
     """
@@ -55,7 +56,7 @@ def gen_hdl(
     or with an OpenAI hosted model (ChatCompletion API).
     Supports batching for Hugging Face backend and lm-deluge for API backend.
     """
-    print(f'[GEN_HDL]: Generating Verilog HDL code with {model}')
+    print(f'[GEN_HDL]: Generating Verilog HDL code with {model}, temperature={temperature}, backend={backend}, batch_inference={batch_inference}, hf_batch_size={hf_batch_size}, force_thinking={force_thinking}')
     # ─────────────────────────────────────────  Dataset  ────────────────────────
     data_path = os.path.join(data_dir, "jsonl", data_jsonl)
     # Load the initial dataset
@@ -180,7 +181,7 @@ def gen_hdl(
         )
         gen_args = dict(
             max_new_tokens=4096, do_sample=True,
-            temperature=1.0, top_k=50, top_p=1.0,
+            temperature=temperature, top_k=50, top_p=1.0,
             return_full_text=False,
             eos_token_id=tok.eos_token_id, # Explicitly set eos_token_id
             pad_token_id=tok.pad_token_id  # Explicitly set pad_token_id
@@ -227,7 +228,7 @@ def gen_hdl(
         if batch_inference is True: # Using lm-deluge
             DELUGE_BATCH_SIZE = 50 # This could be a parameter too
             deluge_client = LLMClient(model_names=[model], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000,max_concurrent_requests=1_000, sampling_params=SamplingParams(
-                temperature=1.0, top_p=1.0, max_new_tokens=4096))
+                temperature=temperature, top_p=1.0, max_new_tokens=4096))
             
             deluge_conversations = []
             for system_prompt_content, user_assistant_messages in prompts_tuples_for_deluge:
@@ -317,7 +318,7 @@ def gen_hdl(
                     rsp = client.chat.completions.create(
                         model=model,
                         messages=api_payload_messages,
-                        max_tokens=4096, temperature=1.0, top_p=1.0,
+                        max_tokens=4096, temperature=temperature, top_p=1.0,
                     )
                     code = rsp.choices[0].message.content
                     _dump(code, exp_dir, model, module_name, idx_code)

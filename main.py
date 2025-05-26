@@ -38,6 +38,7 @@ if __name__ == '__main__':
                         help="For EVAL mode, parse the module name directly from Verilog file content instead of deriving it from the filename")
     parser.add_argument("-hb", "--hf_batch_size", type=int, default=1, help="Batch size for Huggingface local inference (GEN_HDL-HF mode) (default: 1), only used if backend is set to 'hf', adjust to maximize performance and avoid OOM errors") # New arg
     parser.add_argument("-ft", "--force_thinking", action='store_true', help="For Huggingface local inference (GEN_HDL-HF mode) force the model to start thinking by ensuring that <think> always appears first in text (Only enable for specific thinking models like DeepSeek-R1-Distill series) (default: off)") # New arg
+    parser.add_argument("-tp", "--temperature", type=float, default=1.0, help="Temperature for model generation (default: 1.0)") # New arg
 
 
     args = parser.parse_args()
@@ -66,7 +67,7 @@ if __name__ == '__main__':
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
     elif args.mode == "GEN_HDL":
-        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, args.batch_inference, args.hf_batch_size, args.force_thinking)
+        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, args.batch_inference, args.hf_batch_size, args.force_thinking, args.temperature)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":
