@@ -36,7 +36,7 @@ if __name__ == '__main__':
     parser.add_argument("-ep", "--eval-parse-module-name",
                         action='store_true', # Makes it a boolean flag, default is False
                         help="For EVAL mode, parse the module name directly from Verilog file content instead of deriving it from the filename.")
-
+    parser.add_argument("-hb", "--hf_batch_size", type=int, default=1, help="Batch size for Hugging Face local inference (GEN_HDL mode) (default: 1), only used if backend is set to 'hf', adjust to maximize performance and avoid OOM errors") # New arg
 
     args = parser.parse_args()
 
@@ -64,7 +64,7 @@ if __name__ == '__main__':
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
     elif args.mode == "GEN_HDL":
-        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, args.batch_inference)
+        gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, args.batch_inference, args.hf_batch_size)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":
