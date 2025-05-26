@@ -32,10 +32,11 @@ def sft(input_model, output_model, data_jsonl, cache_dir, data_dir):
     """
     Model
     """
+    import torch
     model_config = {
         "pretrained_model_name_or_path": pretrained_model_name_or_path,
-        "torch_dtype": "auto",
-        "device_map": 'auto',
+        "torch_dtype": torch.float16,#torch.bfloat16 if bf16_supported else torch.float16,#"auto",
+        #"device_map": 'auto',
         "cache_dir": cache_dir,
     }
     model = AutoModelForCausalLM.from_pretrained(**model_config)
@@ -50,9 +51,16 @@ def sft(input_model, output_model, data_jsonl, cache_dir, data_dir):
         "model": model,
         "train_dataset": dataset,
         "tokenizer": tokenizer,
-        "max_seq_length": 2048,
+        "max_seq_length": 4096,
     }
-    trainer = SFTTrainer(**trainer_config)
+    from trl import SFTConfig
+    training_args = SFTConfig(max_length=4096,
+                              output_dir="./tmp",
+    )
+    trainer = SFTTrainer(model=model,
+                         train_dataset=dataset,
+                         args=training_args)
+    #trainer = SFTTrainer(**trainer_config)
     print_trainable_parameters('SFT', trainer.model)
 
     trainer.train()
