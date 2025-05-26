@@ -11,6 +11,9 @@ from openai import OpenAI
 # Imports for lm-deluge batch inference
 from lm_deluge import LLMClient, SamplingParams, Conversation as DelugeConversation, Message as DelugeMessage
 
+# Imports for PEFT (LoRA) support
+from peft import PeftModel, PeftConfig
+
 _REGISTRY = {
     "openai":   ("https://api.openai.com/v1",      "OPENAI_API_KEY"),
     "groq":     ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
@@ -49,6 +52,7 @@ def gen_hdl(
     hf_batch_size=1,        # Batch size for Hugging Face local inference
     force_thinking=False,   # Force thinking for Hugging Face local inference (specific models, eg. DeepSeek-R1-Distill)
     temperature=1.0,        # Temperature for model generation
+    lora_weights=None,      # Path to LoRA adapter weights directory for Hugging Face models    
     **provider_kw,
 ):
     """
@@ -56,7 +60,34 @@ def gen_hdl(
     or with an OpenAI hosted model (ChatCompletion API).
     Supports batching for Hugging Face backend and lm-deluge for API backend.
     """
-    print(f'[GEN_HDL]: Generating Verilog HDL code with {model}, temperature={temperature}, backend={backend}, batch_inference={batch_inference}, hf_batch_size={hf_batch_size}, force_thinking={force_thinking}')
+    print(f'[GEN_HDL]: Generating Verilog HDL code with {model}, lora_weights={lora_weights}, temperature={temperature}, backend={backend}, batch_inference={batch_inference}, hf_batch_size={hf_batch_size}, force_thinking={force_thinking}')
+
+    base_model_identifier = model # Use the original model arg as the base identifier
+
+    # Determine the model identifier for saving paths
+    lora_adapter_name_part = ""
+    if backend == "hf" and lora_weights:
+        # Ensure the LoRA weights path is valid and points to the adapter directory
+        lora_adapter_path_for_name = lora_weights
+        if os.path.isfile(lora_weights): # If path is to a file, assume parent dir
+             lora_adapter_path_for_name = os.path.dirname(lora_weights)
+        
+        # Check if the path is a directory before getting its basename
+        if os.path.isdir(lora_adapter_path_for_name):
+            # Use basename of the normalized path for a cleaner name
+            lora_adapter_name_part = f"+{os.path.basename(os.path.normpath(lora_adapter_path_for_name))}"
+        else: # Fallback if path is not a dir (e.g. user provides a non-existent path)
+            lora_adapter_name_part = "+lora_unknown" 
+            
+    model_identifier_for_paths = f"{base_model_identifier}{lora_adapter_name_part}"
+
+    print(f'[GEN_HDL]: Base model identifier: {base_model_identifier}')
+    if lora_weights and backend == "hf":
+        print(f'[GEN_HDL]: LoRA adapter specified: {lora_weights}')
+        print(f'[GEN_HDL]: Model identifier for output paths: {model_identifier_for_paths}')
+    else:
+        print(f'[GEN_HDL]: Model identifier for output paths: {model_identifier_for_paths}')
+
     # ─────────────────────────────────────────  Dataset  ────────────────────────
     data_path = os.path.join(data_dir, "jsonl", data_jsonl)
     # Load the initial dataset
@@ -81,10 +112,13 @@ def gen_hdl(
     prompts_tuples_for_deluge = []
     indices_to_keep_for_hf = [] # To filter current_ds for HF backend
 
+    # If lora_weights is provided change
+
+
     if resume_generation:
         print(f"[GEN_HDL]: Checking for existing files to resume generation. Total modules in slice: {len(all_module_names_in_slice)}")
         for i, module_name in enumerate(all_module_names_in_slice):
-            module_path = f"{exp_dir}/{model}/{module_name}/gen_{module_name}_{idx_code}.v"
+            module_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}.v"
             if os.path.exists(module_path) and os.path.getsize(module_path) > 0:
                 # File exists and is not empty, skip this module
                 continue
@@ -147,8 +181,9 @@ def gen_hdl(
             print("[GEN_HDL - HF]: No data to process for Hugging Face backend after filtering. Exiting.")
             return
 
+        # Use base_model_identifier for loading weights and tokenizer
         pretrained_path = (
-            f"{cache_dir}/{model}" if "VeriLogos" in model else model
+            f"{cache_dir}/{base_model_identifier}" if "VeriLogos" in base_model_identifier else base_model_identifier
         )
         tok = AutoTokenizer.from_pretrained(
             pretrained_path, padding_side="left",
@@ -157,10 +192,19 @@ def gen_hdl(
         if tok.pad_token is None:
             tok.pad_token = tok.eos_token
 
-        net = AutoModelForCausalLM.from_pretrained(
+        print(f"[GEN_HDL - HF]: Loading base model from {pretrained_path}...")
+        base_model_hf = AutoModelForCausalLM.from_pretrained(
             pretrained_path, torch_dtype="auto",
             device_map="auto", cache_dir=cache_dir
         )
+        net = base_model_hf # Start with the base model
+        
+        if lora_weights:
+            print(f"[GEN_HDL - HF]: Loading LoRA weights from {lora_weights}...")
+            # Load the LoRA adapter weights
+            lora_config = PeftConfig.from_pretrained(lora_weights)
+            net = PeftModel.from_pretrained(base_model_hf, lora_weights, torch_dtype="auto")
+            net.eval()
 
         # Apply chat template to the (potentially filtered) ds_for_hf
         ds_for_hf_formatted = ds_for_hf.map(
@@ -217,17 +261,20 @@ def gen_hdl(
         for i, out in tqdm(enumerate(pipe(KeyDataset(ds_for_hf_formatted, "formatted_messages"), **gen_args)), total=len(ds_for_hf_formatted)):
             module_name = modules_to_process_names[i] # Aligned with ds_for_hf_formatted
             code = out[0]["generated_text"]
-            _dump(code, exp_dir, model, module_name, idx_code)
+            _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
 
     # ───────────────────────────────────  Back-end - OpenAI  ───────────────────
     elif backend == "api":
         if not modules_to_process_names: # Check if any modules to process for API
             print("[GEN_HDL - API]: No data to process for API backend after filtering. Exiting.")
             return
+        
+        # Use base_model_identifier for API model name
+        current_api_model_id = base_model_identifier
 
         if batch_inference is True: # Using lm-deluge
             DELUGE_BATCH_SIZE = 50 # This could be a parameter too
-            deluge_client = LLMClient(model_names=[model], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000,max_concurrent_requests=1_000, sampling_params=SamplingParams(
+            deluge_client = LLMClient(model_names=[current_api_model_id ], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000,max_concurrent_requests=1_000, sampling_params=SamplingParams(
                 temperature=temperature, top_p=1.0, max_new_tokens=4096))
             
             deluge_conversations = []
@@ -265,9 +312,9 @@ def gen_hdl(
                     if code is None:
                         print(f"[GEN_HDL]: Error generating code for module {module_name}. Response is None.")
                     else:              
-                        _dump(code, exp_dir, model, module_name, idx_code)
-                        if model in ("deepseek-reasoner", "deepseek-r1") and thinking: # Check if thinking is not None
-                            trace_path = f"{exp_dir}/{model}/{module_name}/gen_{module_name}_{idx_code}_trace.txt"
+                        _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
+                        if current_api_model_id in ("deepseek-reasoner", "deepseek-r1") and thinking: # Check if thinking is not None
+                            trace_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}_trace.txt"
                             os.makedirs(os.path.dirname(trace_path), exist_ok=True)
                             with open(trace_path, "w") as trace_file:
                                 trace_file.write(str(thinking)) # Ensure thinking is written as string
@@ -309,24 +356,24 @@ def gen_hdl(
 
 
                 # Deepseek-reasoner specific handling (original logic)
-                if model != "deepseek-reasoner":
+                if current_api_model_id != "deepseek-reasoner":
                      # Add empty assistant message to prompt for response, if not already ending with one.
                      if not api_payload_messages or api_payload_messages[-1]["role"] != "assistant":
                         api_payload_messages.append({"role": "assistant", "content": ""})
                 
                 try:
                     rsp = client.chat.completions.create(
-                        model=model,
+                        model=current_api_model_id,
                         messages=api_payload_messages,
                         max_tokens=4096, temperature=temperature, top_p=1.0,
                     )
                     code = rsp.choices[0].message.content
-                    _dump(code, exp_dir, model, module_name, idx_code)
+                    _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
 
-                    if model == "deepseek-reasoner" and hasattr(rsp.choices[0].message, 'reasoning_content'):
+                    if current_api_model_id == "deepseek-reasoner" and hasattr(rsp.choices[0].message, 'reasoning_content'):
                         trace = rsp.choices[0].message.reasoning_content
                         if trace: # Ensure trace is not None
-                            trace_path = f"{exp_dir}/{model}/{module_name}/gen_{module_name}_{idx_code}_trace.txt"
+                            trace_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}_trace.txt"
                             os.makedirs(os.path.dirname(trace_path), exist_ok=True)
                             with open(trace_path, "w") as trace_file:
                                 trace_file.write(str(trace))
@@ -334,7 +381,7 @@ def gen_hdl(
                     print(f"[GEN_HDL - API Sequential]: Error processing module {module_name}: {e}")
                     print(f"Payload messages: {api_payload_messages}") # Log messages for debugging
                     # Optionally, save a placeholder or skip
-                    _dump(f"Error generating code: {e}", exp_dir, model, module_name, idx_code)
+                    _dump(f"Error generating code: {e}", exp_dir, model_identifier_for_paths, module_name, idx_code)
 
 
     else:
