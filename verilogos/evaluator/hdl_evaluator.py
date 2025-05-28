@@ -9,13 +9,23 @@ from verilogos.utils.syntax import check_syntax
 from verilogos.utils.functionality import check_functionality
 
 def process_verilog_code(input_string):
+    # Try to filter out content before </think> tag to exclude reasoning traces
+    think_tag_end = "</think>"
+    think_tag_index = input_string.find(think_tag_end)
+    if think_tag_index != -1:
+        # If </think> tag is found, only consider content after it
+        processed_string = input_string[think_tag_index + len(think_tag_end):]
+    else:
+        # If </think> tag is not found, use the entire input string
+        processed_string = input_string
+
     pattern = r"```(.*?)```"
-    match = re.search(pattern, input_string, re.DOTALL)
+    match = re.search(pattern, processed_string, re.DOTALL)
 
     if match:
         code = match.group(1).strip()
     else:
-        code = input_string  
+        code = processed_string  
 
     pattern2 = r'\bmodule\b.*?endmodule'
     match2 = re.search(pattern2, code, re.DOTALL)
