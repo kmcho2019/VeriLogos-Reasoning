@@ -1,7 +1,7 @@
 import os
 import torch
 import transformers
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.pipelines.pt_utils import KeyDataset
 from tqdm import tqdm
@@ -13,6 +13,9 @@ from lm_deluge import LLMClient, SamplingParams, Conversation as DelugeConversat
 
 # Imports for PEFT (LoRA) support
 from peft import PeftModel, PeftConfig
+
+# Import time for retry delay
+import time
 
 _REGISTRY = {
     "openai":   ("https://api.openai.com/v1",      "OPENAI_API_KEY"),
@@ -52,7 +55,9 @@ def gen_hdl(
     hf_batch_size=1,        # Batch size for Hugging Face local inference
     force_thinking=False,   # Force thinking for Hugging Face local inference (specific models, eg. DeepSeek-R1-Distill)
     temperature=1.0,        # Temperature for model generation
-    lora_weights=None,      # Path to LoRA adapter weights directory for Hugging Face models    
+    lora_weights=None,      # Path to LoRA adapter weights directory for Hugging Face models
+    create_resume_file=None,# Path to save a file with names of unfinished modules
+    resume_from_file=None,  # Path to a file with module names to process   
     **provider_kw,
 ):
     """
@@ -90,18 +95,26 @@ def gen_hdl(
 
     # ─────────────────────────────────────────  Dataset  ────────────────────────
     data_path = os.path.join(data_dir, "jsonl", data_jsonl)
-    # Load the initial dataset
-    current_ds = load_dataset("json", data_files=data_path, split="train")
+    
+    # Load the full dataset definition to get all possible module names and prompts
+    full_ds = load_dataset("json", data_files=data_path, split="train")
+    all_module_names = [str(item.get("name", str(item.get("index")))) for item in full_ds]
 
-    if num_process is not None and idx_process is not None:
-        current_ds = slice_dataset(current_ds, num_process, idx_process)
-
-    # Extract all messages and module names from the current dataset slice
-    all_messages_in_slice = [item["messages"] for item in current_ds]
-    all_module_names_in_slice = [
-        item["name"] if "name" in current_ds.column_names else str(item["index"])
-        for item in current_ds
-    ]
+    # Mode to discover unfinished modules and save to a file, then exit
+    if create_resume_file:
+        print(f"[GEN_HDL]: Discovery mode active. Finding unfinished modules to save to '{create_resume_file}'.")
+        unfinished_modules = []
+        for module_name in tqdm(all_module_names, desc="Discovering unfinished modules"):
+            module_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}.v"
+            if not (os.path.exists(module_path) and os.path.getsize(module_path) > 0):
+                unfinished_modules.append(module_name)
+        
+        with open(create_resume_file, 'w') as f:
+            for name in unfinished_modules:
+                f.write(f"{name}\n")
+        
+        print(f"[GEN_HDL]: Found {len(unfinished_modules)} unfinished modules. Their names have been saved to '{create_resume_file}'. Exiting.")
+        return
 
     # These lists will hold the items that actually need to be processed
     modules_to_process_names = []
@@ -110,71 +123,112 @@ def gen_hdl(
     prompts_for_sequential_api = []
     # For API (lm-deluge), we need (system_prompt, user_assistant_messages) tuples.
     prompts_tuples_for_deluge = []
-    indices_to_keep_for_hf = [] # To filter current_ds for HF backend
+    # This will hold the final dataset slice for the HF backend
+    ds_for_hf = None
+    
 
-    # If lora_weights is provided change
+    # Determine which modules to process based on the resume mode
+    # Mode to process a specific list of modules from a file
+    if resume_from_file:
+        print(f"[GEN_HDL]: Resuming generation from module list: '{resume_from_file}'")
+        if not os.path.exists(resume_from_file):
+            print(f"[GEN_HDL]: ERROR - Resume file not found: {resume_from_file}. Exiting.")
+            return
 
+        with open(resume_from_file, 'r') as f:
+            # Read names from file, stripping whitespace/newlines
+            module_names_from_file = [line.strip() for line in f if line.strip()]
 
-    if resume_generation:
-        print(f"[GEN_HDL]: Checking for existing files to resume generation. Total modules in slice: {len(all_module_names_in_slice)}")
-        for i, module_name in enumerate(all_module_names_in_slice):
+        print(f"[GEN_HDL]: Found {len(module_names_from_file)} modules to process in the file.")
+        
+        # Create a lookup dictionary for fast access to prompts
+        prompt_lookup = {str(item.get("name", str(item.get("index")))): item["messages"] for item in full_ds}
+        
+        # Prepare data structures for the modules listed in the file
+        filtered_data_for_hf = {'name': [], 'messages': []}
+        for name in module_names_from_file:
+            if name in prompt_lookup:
+                modules_to_process_names.append(name)
+                messages = prompt_lookup[name]
+                prompts_for_sequential_api.append(messages)
+
+                # For HF
+                filtered_data_for_hf['name'].append(name)
+                filtered_data_for_hf['messages'].append(messages)
+
+                # For Deluge
+                system_prompt = next((msg['content'] for msg in messages if msg['role'] == 'system'), "You are a helpful Verilog code generator.")
+                user_assistant_msgs = [msg for msg in messages if msg['role'] in ['user', 'assistant']]
+                prompts_tuples_for_deluge.append((system_prompt, user_assistant_msgs))
+            else:
+                print(f"[GEN_HDL]: Warning: Module '{name}' from file not found in dataset '{data_jsonl}'. Skipping.")
+        
+        ds_for_hf = Dataset.from_dict(filtered_data_for_hf)
+
+    # Original resume logic: check output directory for all modules in the dataset
+    elif resume_generation:
+        print(f"[GEN_HDL]: Checking for existing files to resume generation. Total modules in dataset: {len(all_module_names)}")
+        indices_to_keep_for_hf = []
+        for i, module_name in enumerate(all_module_names):
             module_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}.v"
             if os.path.exists(module_path) and os.path.getsize(module_path) > 0:
-                # File exists and is not empty, skip this module
                 continue
             
-            # Module needs to be processed
             modules_to_process_names.append(module_name)
             indices_to_keep_for_hf.append(i)
+            messages = full_ds[i]["messages"]
+            prompts_for_sequential_api.append(messages)
             
-            current_prompt_messages = all_messages_in_slice[i]
-            prompts_for_sequential_api.append(current_prompt_messages)
-
-            system_prompt_content = None
-            user_assistant_messages = []
-            for msg in current_prompt_messages:
-                if msg["role"] == "system":
-                    system_prompt_content = msg["content"]
-                elif msg["role"] in ["user", "assistant"]:
-                    user_assistant_messages.append(msg)
-            
-            if system_prompt_content is None:
-                print(f"Warning: No system prompt found for module {module_name}. Using a default.")
-                system_prompt_content = "You are a helpful Verilog code generator."
-            prompts_tuples_for_deluge.append((system_prompt_content, user_assistant_messages))
-
-        if not modules_to_process_names:
-            print("[GEN_HDL]: No new modules to process. All already generated. Exiting.")
-            return
+            system_prompt = next((msg['content'] for msg in messages if msg['role'] == 'system'), "You are a helpful Verilog code generator.")
+            user_assistant_msgs = [msg for msg in messages if msg['role'] in ['user', 'assistant']]
+            prompts_tuples_for_deluge.append((system_prompt, user_assistant_msgs))
         
-        print(f"[GEN_HDL]: Resuming. Modules to process: {len(modules_to_process_names)}")
-        # Filter the dataset for HF backend
-        ds_for_hf = current_ds.select(indices_to_keep_for_hf)
-    else:
-        print(f"[GEN_HDL]: Processing all {len(all_module_names_in_slice)} modules in slice.")
-        modules_to_process_names = all_module_names_in_slice
-        ds_for_hf = current_ds # Use the whole (or process-sliced) dataset for HF
-        prompts_for_sequential_api = all_messages_in_slice
+        ds_for_hf = full_ds.select(indices_to_keep_for_hf)
 
-        for current_prompt_messages in all_messages_in_slice:
-            system_prompt_content = None
-            user_assistant_messages = []
-            for msg in current_prompt_messages:
-                if msg["role"] == "system":
-                    system_prompt_content = msg["content"]
-                elif msg["role"] in ["user", "assistant"]:
-                    user_assistant_messages.append(msg)
-            if system_prompt_content is None:
-                print("Warning: No system prompt found. Using a default.")
-                system_prompt_content = "You are a helpful Verilog code generator."
-            prompts_tuples_for_deluge.append((system_prompt_content, user_assistant_messages))
+    # Default logic: process all modules from the dataset
+    else:
+        print(f"[GEN_HDL]: Processing all {len(all_module_names)} modules in the dataset.")
+        modules_to_process_names = all_module_names
+        ds_for_hf = full_ds
+        for item in ds_for_hf:
+            messages = item['messages']
+            prompts_for_sequential_api.append(messages)
+            system_prompt = next((msg['content'] for msg in messages if msg['role'] == 'system'), "You are a helpful Verilog code generator.")
+            user_assistant_msgs = [msg for msg in messages if msg['role'] in ['user', 'assistant']]
+            prompts_tuples_for_deluge.append((system_prompt, user_assistant_msgs))
     
-    if not modules_to_process_names: # Should be caught earlier if resume_generation, but as a safeguard
-        print("[GEN_HDL]: No modules to process. Exiting.")
+    if not modules_to_process_names:
+        print("[GEN_HDL]: No modules to process based on the current mode. All work may be complete. Exiting.")
         return
+    
+    # Slice the identified work for the current process if multi-processing is enabled
+    if num_process is not None and idx_process is not None:
+        # This manual slicing is now more complex because data isn't always in a single Dataset object.
+        # We will slice the lists directly, which works for all modes.
+        print(f"[GEN_HDL]: Slicing work for process {idx_process}/{num_process}.")
+        total_size = len(modules_to_process_names)
+        chunk_size = (total_size + num_process - 1) // num_process # Ceiling division
+        start_idx = idx_process * chunk_size
+        end_idx = min((idx_process + 1) * chunk_size, total_size)
+
+        modules_to_process_names = modules_to_process_names[start_idx:end_idx]
+        prompts_for_sequential_api = prompts_for_sequential_api[start_idx:end_idx]
+        prompts_tuples_for_deluge = prompts_tuples_for_deluge[start_idx:end_idx]
+        if ds_for_hf: # ds_for_hf is already filtered, so we slice it further
+            ds_for_hf = ds_for_hf.select(range(start_idx, end_idx))
+
+
+    if not modules_to_process_names:
+        print(f"[GEN_HDL]: No modules to process for this process slice (idx={idx_process}). Exiting.")
+        return
+
+    print(f"[GEN_HDL]: This process will generate code for {len(modules_to_process_names)} modules.")
 
     # ───────────────────────────────────────  Back-end - HF  ───────────────────
     if backend == "hf":
+        if not ds_for_hf:
+            print("[GEN_HDL - HF]: No data to process for Hugging Face backend after filtering. Exiting.")
+            return
         print(f"[GEN_HDL - HF]: Processing {len(modules_to_process_names)} modules with Hugging Face backend.")
         print(f"[GEN_HDL - HF]: Hugging Face Batch Size: {hf_batch_size}")
         if not ds_for_hf: # Check if the dataset for HF is empty after filtering
@@ -272,9 +326,8 @@ def gen_hdl(
         # Use base_model_identifier for API model name
         current_api_model_id = base_model_identifier
 
-        if batch_inference is True: # Using lm-deluge
-            DELUGE_BATCH_SIZE = 50 # This could be a parameter too
-            deluge_client = LLMClient(model_names=[current_api_model_id ], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000,max_concurrent_requests=1_000, sampling_params=SamplingParams(
+        if batch_inference is True:
+            deluge_client = LLMClient(model_names=[current_api_model_id], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000, max_concurrent_requests=1_000, sampling_params=SamplingParams(
                 temperature=temperature, top_p=1.0, max_new_tokens=4096))
             
             deluge_conversations = []
@@ -291,37 +344,77 @@ def gen_hdl(
                 print("[GEN_HDL - API Deluge]: No prompts to process with lm-deluge. Exiting.")
                 return
 
-            print(f"[GEN_HDL]: Processing {len(deluge_conversations)} prompts with lm-deluge.")
-            num_total_prompts_deluge = len(deluge_conversations)
+            # Initial list of work items, combining module name and conversation object
+            work_items = list(zip(modules_to_process_names, deluge_conversations))
+            retry_count = 0
+            max_retries = 3
+            retry_delay = 5
+            DELUGE_BATCH_SIZE = 20
+            deluge_batch_size = min(DELUGE_BATCH_SIZE, len(work_items))  # Ensure batch size is not larger than work items
 
-            # Batching for lm-deluge
-            batched_deluge_prompts = [deluge_conversations[i:i + DELUGE_BATCH_SIZE] for i in range(0, num_total_prompts_deluge, DELUGE_BATCH_SIZE)]
-            # Ensure modules_to_process_names is used for batching module names
-            batched_module_names_deluge = [modules_to_process_names[i:i + DELUGE_BATCH_SIZE] for i in range(0, num_total_prompts_deluge, DELUGE_BATCH_SIZE)]
+            while work_items and retry_count < max_retries:
+                if retry_count > 0:
+                    print(f"\n[GEN_HDL]: Retrying {len(work_items)} failed modules. Attempt {retry_count + 1}/{max_retries}.")
+                    print(f"[GEN_HDL]: Waiting for {retry_delay} seconds before next attempt...")
+                    time.sleep(retry_delay)
 
-            print(f"[GEN_HDL]: Total lm-deluge batches to process: {len(batched_deluge_prompts)}")
-            for idx, batch_of_convs in enumerate(batched_deluge_prompts):
-                print(f"[GEN_HDL]: Processing lm-deluge batch {idx + 1}/{len(batched_deluge_prompts)} with {len(batch_of_convs)} prompts.")
-                current_module_names_batch = batched_module_names_deluge[idx]
-                responses = deluge_client.process_prompts_sync(batch_of_convs, show_progress=True)
-                
-                for j, rsp in enumerate(responses):
-                    module_name = current_module_names_batch[j]
-                    code = rsp.completion
-                    thinking = rsp.thinking
-                    if code is None:
-                        print(f"[GEN_HDL]: Error generating code for module {module_name}. Response is None.")
-                    else:              
-                        _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
-                        if current_api_model_id in ("deepseek-reasoner", "deepseek-r1") and thinking: # Check if thinking is not None
-                            trace_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}_trace.txt"
-                            os.makedirs(os.path.dirname(trace_path), exist_ok=True)
-                            with open(trace_path, "w") as trace_file:
-                                trace_file.write(str(thinking)) # Ensure thinking is written as string
+                # Get data for the current attempt
+                current_module_names = [item[0] for item in work_items]
+                current_conversations = [item[1] for item in work_items]
+                num_prompts_this_attempt = len(current_conversations)
+
+                # Batch the current work
+                batched_deluge_prompts = [current_conversations[i:i + deluge_batch_size] for i in range(0, num_prompts_this_attempt, deluge_batch_size)]
+                batched_module_names_deluge = [current_module_names[i:i + deluge_batch_size] for i in range(0, num_prompts_this_attempt, deluge_batch_size)]
+
+                failed_items_this_attempt = []
+
+                print(f"[GEN_HDL]: Processing {num_prompts_this_attempt} prompts in {len(batched_deluge_prompts)} batches (size={deluge_batch_size}).")
+                for idx, batch_of_convs in enumerate(batched_deluge_prompts):
+                    print(f"[GEN_HDL]: Processing lm-deluge batch {idx + 1}/{len(batched_deluge_prompts)} with {len(batch_of_convs)} prompts.")
+                    current_module_names_batch = batched_module_names_deluge[idx]
+                    
+                    try:
+                        responses = deluge_client.process_prompts_sync(batch_of_convs, show_progress=True)
+                        
+                        for j, rsp in enumerate(responses):
+                            module_name = current_module_names_batch[j]
+                            code = rsp.completion
+                            thinking = rsp.thinking
+                            
+                            if code is None:
+                                print(f"[GEN_HDL]: Error generating code for module {module_name}. Response is None. Scheduling for retry.")
+                                failed_items_this_attempt.append((module_name, batch_of_convs[j]))
+                            else:
+                                _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
+                                if current_api_model_id in ("deepseek-reasoner", "deepseek-r1") and thinking:
+                                    trace_path = f"{exp_dir}/{model_identifier_for_paths}/{module_name}/gen_{module_name}_{idx_code}_trace.txt"
+                                    os.makedirs(os.path.dirname(trace_path), exist_ok=True)
+                                    with open(trace_path, "w") as trace_file:
+                                        trace_file.write(str(thinking))
+
+                    except Exception as e:
+                        print(f"[GEN_HDL]: An exception occurred during batch processing: {e}. Scheduling all modules in this batch for retry.")
+                        for j, conv in enumerate(batch_of_convs):
+                             failed_items_this_attempt.append((current_module_names_batch[j], conv))
+
+                # Prepare for the next iteration by setting work_items to the list of failures
+                work_items = failed_items_this_attempt
+                retry_count += 1
+                # Print the number of remaining work items
+                print(f"[GEN_HDL]: {len(work_items)} modules failed in this attempt {retry_count}/{max_retries}. Retrying...")
+
+            # After the loop, report any modules that permanently failed
+            if work_items:
+                print(f"\n[GEN_HDL]: CRITICAL: After {max_retries} attempts, the following {len(work_items)} modules still failed to generate:")
+                for module_name, _ in work_items:
+                    print(f"  - {module_name}")
+            else:
+                print("\n[GEN_HDL]: All modules processed successfully.")                                
         else: # Sequential API calls (no external batching library)
             client = get_client(provider=provider, **provider_kw)
             # Default system prompt, will be prepended if item["messages"] doesn't have one or to standardize
-            generic_sys_prompt_content = "You are a helpful Verilog code generator."
+            generic_sys_prompt_content = "You are an AI programming assistant specialized in Verilog. Follow the user's requirements and content closely.\n"#"You are a helpful Verilog code generator."
 
             print(f"[GEN_HDL - API Sequential]: Starting generation for {len(modules_to_process_names)} prompts.")
             for i, module_name in tqdm(enumerate(modules_to_process_names), total=len(modules_to_process_names)):
@@ -365,7 +458,7 @@ def gen_hdl(
                     rsp = client.chat.completions.create(
                         model=current_api_model_id,
                         messages=api_payload_messages,
-                        max_tokens=4096, temperature=temperature, top_p=1.0,
+                        max_tokens=4096*8, temperature=temperature, top_p=1.0,
                     )
                     code = rsp.choices[0].message.content
                     _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
