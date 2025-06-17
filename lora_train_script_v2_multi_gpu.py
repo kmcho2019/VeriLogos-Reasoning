@@ -1,15 +1,42 @@
 import os
 import torch
+import argparse
 from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
 from peft import get_peft_model, LoraConfig, TaskType
 from datasets import Dataset, DatasetDict, load_dataset
 from datetime import datetime
 
+
+# --- Argument Parsing ---
+def parse_arguments():
+    """Parses command-line arguments."""
+    parser = argparse.ArgumentParser(description="Fine-tune a causal language model with LoRA.")
+    parser.add_argument(
+        "--input_model",
+        type=str,
+        default="/data/genai/models/Qwen3-14B",
+        help="Path to the pretrained model from which to load the tokenizer and model."
+    )
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="/data/genai/kmcho/Reasoning_Model/Qwen3-14B-exp-20250605-v1",
+        help="The base directory where the final LoRA weights and logs will be saved."
+    )
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        default="/data/genai/kmcho/Reasoning_Model/VeriLogos-Reasoning/data/jsonl/test_code_output_mask_test_user_role_fixed_prompt_changed_with_verified_synthetic_reasoning_traces_sft_data_20250529.jsonl",
+        help="Path to the JSONL file containing the reasoning dataset for training."
+    )
+    return parser.parse_args()
+
+
 # --- Configuration ---
 # os.environ["CUDA_VISIBLE_DEVICES"] = "4"#"5,6,7" # Ensure this matches your available GPUs
-MODEL_NAME_OR_PATH = "Qwen/Qwen3-8B" #"/data/genai/models/DeepSeek-R1-Distill-Qwen-7B"
+MODEL_NAME_OR_PATH = "/data/genai/models/Qwen3-14B" #"/data/genai/models/DeepSeek-R1-Distill-Qwen-7B"
 TOKENIZER_PATH = MODEL_NAME_OR_PATH
-OUTPUT_BASE_DIR = "./data/lora_weights" #"/data/genai/kmcho/Reasoning_Model/DeepSeek-R1-Distill-Qwen-7B-exp-20250526-v1"
+OUTPUT_BASE_DIR = "/data/genai/kmcho/Reasoning_Model/Qwen3-14B-exp-20250605-v1"#"./data/lora_weights" #"/data/genai/kmcho/Reasoning_Model/DeepSeek-R1-Distill-Qwen-7B-exp-20250526-v1"
 
 safe_model_name = MODEL_NAME_OR_PATH.replace('/', '_').replace('-', '_')
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -23,13 +50,15 @@ v1_reasoning_dataset_jsonl_path = "/home/kmcho/2_Project/LX_Semicon_GenAI/Reason
 # V2 is a superset of V1, so it includes all V1 samples plus additional ones
 v2_reasoning_dataset_jsonl_path = "/home/kmcho/2_Project/LX_Semicon_GenAI/Reasoning_Model_Exp/VeriLogos-Reasoning/data/jsonl/test_code_output_mask_test_user_role_fixed_prompt_changed_with_verified_synthetic_reasoning_traces_sft_data_20250529.jsonl"
 
+v2_reasoning_dataset_jsonl_path = "/data/genai/kmcho/Reasoning_Model/VeriLogos-Reasoning/data/jsonl/test_code_output_mask_test_user_role_fixed_prompt_changed_with_verified_synthetic_reasoning_traces_sft_data_20250529.jsonl"
+
 REASONING_DATASET_JSONL_PATH = v2_reasoning_dataset_jsonl_path#v1_reasoning_dataset_jsonl_path#"/data/genai/kmcho/Reasoning_Model/VeriLogos-Reasoning/data/jsonl/test_code_output_mask_test_user_role_fixed_prompt_changed_with_verified_synthetic_reasoning_traces_sft_data_20250525.jsonl" #"/data/genai/kmcho/Reasoning_Model/output.jsonl" # Your correctly formatted file
 
 # --- LoRA configuration ---
 lora_config = LoraConfig(
     r=8,
     lora_alpha=16,
-    target_modules=["q_proj", "v_proj"], # Verify these against your model's architecture.
+    target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"], # Verify these against your model's architecture.
                                          # Common for Llama/Mistral: "q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"
     lora_dropout=0.1,
     bias="none",
@@ -37,22 +66,21 @@ lora_config = LoraConfig(
 )
 
 # --- Load Model and Tokenizer ---
-def load_model_and_tokenizer():
-    print("Loading model and tokenizer...")
+def load_model_and_tokenizer(model_name_or_path):
+    """Loads the model and tokenizer from the specified path."""
+    print(f"Loading model and tokenizer from {model_name_or_path}...")
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME_OR_PATH,
-        # device_map="auto", # Distributes model across available GPUs
-        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16, # Use bfloat16 if available, else float16 for memory efficiency
-        use_cache=False, # Disable cache for training to save memory
+        model_name_or_path,
+        torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+        use_cache=False,
     )
-    tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
         model.config.pad_token_id = tokenizer.eos_token_id
     
     print(f"Tokenizer pad token ID: {tokenizer.pad_token_id}, EOS token ID: {tokenizer.eos_token_id}")
-
 
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
@@ -168,16 +196,16 @@ def preprocess_sft_data(examples, tokenizer, max_length=8192):
     }
 
 # --- Fine-tuning ---
-def fine_tune_model(model, tokenizer, dataset):
+def fine_tune_model(model, tokenizer, dataset, output_dir):
     training_args = TrainingArguments(
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
         eval_strategy="epoch",
         per_device_train_batch_size=1, # Adjust based on GPU memory; 1 is low, try 2 or 4 if memory allows
         per_device_eval_batch_size=1,
         num_train_epochs=3,
         save_steps=500, # Consider aligning with evaluation frequency or making it larger
         save_total_limit=2, # Saves the best and the last checkpoint
-        logging_dir=os.path.join(OUTPUT_DIR, "logs"),
+        logging_dir=os.path.join(output_dir, "logs"),
         logging_steps=10, # Log more frequently for smaller datasets/debugging
         load_best_model_at_end=True,
         save_strategy="epoch",
@@ -208,21 +236,32 @@ def fine_tune_model(model, tokenizer, dataset):
     trainer.train()
 
 # --- Save LoRA Weights ---
-def save_lora_weights(model):
-    model.save_pretrained(OUTPUT_DIR) # Saves LoRA adapter weights
+def save_lora_weights(model, output_dir):
+    model.save_pretrained(output_dir) # Saves LoRA adapter weights
     # tokenizer.save_pretrained(OUTPUT_DIR) # Also save tokenizer for completeness
-    print(f"LoRA weights and tokenizer saved to {OUTPUT_DIR}")
+    print(f"LoRA weights and tokenizer saved to {output_dir}")
 
 # --- Main Execution ---
-def main():
-    model, tokenizer = load_model_and_tokenizer()
+def main(args):
+    # Enable TF32 tensorcores
+    torch.set_float32_matmul_precision("high")
 
-    print(f"Loading dataset from {REASONING_DATASET_JSONL_PATH}...")
+
+    # --- Dynamic Output Directory Configuration ---
+    safe_model_name = args.input_model.replace('/', '_').replace('-', '_')
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    final_output_dir = os.path.join(args.output_dir, f"{safe_model_name}_{timestamp}")
+    os.makedirs(final_output_dir, exist_ok=True)
+    print(f"Final output will be saved to: {final_output_dir}")
+
+    model, tokenizer = load_model_and_tokenizer(args.input_model)
+
+    print(f"Loading dataset from {args.dataset_path}...")
     try:
         # Ensure your output.jsonl is fixed: each line is {"messages": [your_array_here]}
-        raw_dataset = load_dataset('json', data_files=REASONING_DATASET_JSONL_PATH, split="train")
+        raw_dataset = load_dataset('json', data_files=args.dataset_path, split="train")
     except Exception as e:
-        print(f"Failed to load dataset. Ensure '{REASONING_DATASET_JSONL_PATH}' has one JSON object per line, with a 'messages' key.")
+        print(f"Failed to load dataset. Ensure '{args.dataset_path}' has one JSON object per line, with a 'messages' key.")
         print(f"Error: {e}")
         return
 
@@ -245,10 +284,11 @@ def main():
         return
     print(f"Tokenized dataset ready. Number of examples: {len(tokenized_dataset)}. Example input_ids: {tokenized_dataset[0]['input_ids'][:10]}...") # Print first 10 tokens
 
-    fine_tune_model(model, tokenizer, tokenized_dataset)
-    save_lora_weights(model)
-    tokenizer.save_pretrained(OUTPUT_DIR) # Save tokenizer with the fine-tuned model
+    fine_tune_model(model, tokenizer, tokenized_dataset, final_output_dir)
+    save_lora_weights(model, final_output_dir)
+    tokenizer.save_pretrained(final_output_dir) # Save tokenizer with the fine-tuned model
     print("Fine-tuning complete and LoRA weights saved.")
 
 if __name__ == "__main__":
-    main()
+    args = parse_arguments()
+    main(args)
