@@ -1,23 +1,34 @@
 #!/bin/bash
 
-# This script runs 40 python commands in parallel, each with a different
-# resume file, and logs their output to separate files.
+# This script runs a configurable number of python commands in parallel,
+# each with a different resume file, and logs their output to separate files.
+
+# --- Argument Handling ---
+# Check if the correct number of arguments is provided.
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <date_string> <number_of_jobs>"
+    echo "Example: $0 20250620 40"
+    exit 1
+fi
 
 # --- Configuration ---
+# The date string for your filenames, taken from the first argument.
+DATE_STR="$1"
+
+# The number of parallel jobs to run, taken from the second argument.
+NUM_JOBS="$2"
+
 # Base directory for resume files
 RESUME_DIR="./resume_file"
 
 # Base directory for logs
 LOG_BASE_DIR="./resume_file/logs"
 
-# The date string used in your file names
-DATE_STR="20250609"
-
 # The specific directory for today's logs
 LOG_DIR="${LOG_BASE_DIR}/code_resume_file_${DATE_STR}"
 
 # --- Script Start ---
-echo "🚀 Starting parallel execution of 40 jobs..."
+echo "🚀 Starting parallel execution of ${NUM_JOBS} jobs..."
 
 # Create the log directory if it doesn't exist
 # The -p flag creates parent directories as needed and doesn't error if it already exists.
@@ -25,8 +36,9 @@ mkdir -p "$LOG_DIR"
 echo "Logs will be stored in: $LOG_DIR"
 echo "--------------------------------------------------"
 
-# Loop from 1 to 40 to launch each job
-for i in {1..40}
+# Loop from 1 to NUM_JOBS to launch each job
+# Using $(seq ...) for broader compatibility.
+for i in $(seq 1 $NUM_JOBS)
 do
     # Format the number with a leading zero (e.g., 1 -> 01, 10 -> 10)
     num=$(printf "%02d" $i)
@@ -46,7 +58,7 @@ done
 
 # --- Wait for all jobs to complete ---
 echo "--------------------------------------------------"
-echo "✅ All 40 jobs have been launched in the background."
+echo "✅ All ${NUM_JOBS} jobs have been launched in the background."
 echo "Waiting for all processes to complete... (This may take a while)"
 
 # The 'wait' command pauses the script until all background jobs started in this script have finished.
