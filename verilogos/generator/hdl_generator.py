@@ -259,7 +259,10 @@ def gen_hdl(
             # Load the LoRA adapter weights
             lora_config = PeftConfig.from_pretrained(lora_weights)
             net = PeftModel.from_pretrained(base_model_hf, lora_weights, torch_dtype="auto")
-            net.eval()
+        net.eval()
+
+        print("[GEN_HDL - HF]: Applying torch.compile() to the model for optimization...")
+        net = torch.compile(net)
 
         # Apply chat template to the (potentially filtered) ds_for_hf
         ds_for_hf_formatted = ds_for_hf.map(
