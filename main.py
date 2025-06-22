@@ -42,6 +42,7 @@ if __name__ == '__main__':
     parser.add_argument("-lw", "--lora_weights", type=str, default=None, help="Path to LoRA adapter weights directory to be loaded for Hugging Face models (GEN_HDL-HF mode) (default: None)") # New arg
     parser.add_argument("-crf","--create_resume_file", type=str, default=None, help="Create a resume file consisting of all unfinished modules in the current directory, useful for resuming generation later, exits after just creating the file") # New arg
     parser.add_argument("-rff", "--resume_from_file", type=str, default=None, help="Resume hdl generation from a specific file, useful if there is a specific list of modules to generate") # New arg
+    parser.add_argument("-gl", "--generation_length", type=int, default=4096, help="Set the maximum number of output token generated during hdl generation (GEN_HDL) mode (default: 4096)")
 
 
     args = parser.parse_args()
@@ -73,7 +74,7 @@ if __name__ == '__main__':
         gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, 
                 args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, 
                 args.batch_inference, args.hf_batch_size, args.force_thinking, args.temperature, args.lora_weights,
-                args.create_resume_file, args.resume_from_file)
+                args.create_resume_file, args.resume_from_file, args.generation_length)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":

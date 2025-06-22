@@ -57,7 +57,8 @@ def gen_hdl(
     temperature=1.0,        # Temperature for model generation
     lora_weights=None,      # Path to LoRA adapter weights directory for Hugging Face models
     create_resume_file=None,# Path to save a file with names of unfinished modules
-    resume_from_file=None,  # Path to a file with module names to process   
+    resume_from_file=None,  # Path to a file with module names to process
+    out_gen_length=4096,    # Number of output tokens generated
     **provider_kw,
 ):
     """
@@ -278,7 +279,7 @@ def gen_hdl(
             torch_dtype="auto"
         )
         gen_args = dict(
-            max_new_tokens=4096, do_sample=True,
+            max_new_tokens=out_gen_length, do_sample=True,
             temperature=temperature, top_k=50, top_p=1.0,
             return_full_text=False,
             eos_token_id=tok.eos_token_id, # Explicitly set eos_token_id
@@ -328,7 +329,7 @@ def gen_hdl(
 
         if batch_inference is True:
             deluge_client = LLMClient(model_names=[current_api_model_id], max_requests_per_minute=5_000, max_tokens_per_minute=1_000_000, max_concurrent_requests=1_000, sampling_params=SamplingParams(
-                temperature=temperature, top_p=1.0, max_new_tokens=4096))
+                temperature=temperature, top_p=1.0, max_new_tokens=out_gen_length))
             
             deluge_conversations = []
             for system_prompt_content, user_assistant_messages in prompts_tuples_for_deluge:
@@ -458,7 +459,7 @@ def gen_hdl(
                     rsp = client.chat.completions.create(
                         model=current_api_model_id,
                         messages=api_payload_messages,
-                        max_tokens=4096*8, temperature=temperature, top_p=1.0,
+                        max_tokens=out_gen_length, temperature=temperature, top_p=1.0,
                     )
                     code = rsp.choices[0].message.content
                     _dump(code, exp_dir, model_identifier_for_paths, module_name, idx_code)
