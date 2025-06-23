@@ -4,8 +4,8 @@ import multiprocessing
 import wandb
 import re
 from datasets import load_dataset
-from transformers import AutoTokenizer
-from trl import PPOTrainer, PPOConfig, AutoModelForCausalLMWithValueHead
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from trl import GRPOTrainer, GRPOConfig
 from tqdm import tqdm
 from verilogos.utils.io import print_trainable_parameters
 from verilogos.utils.parser import parse_module_name, parse_fm
@@ -23,6 +23,7 @@ def build_dataset(dataset, tokenizer):
    def tokenize(sample):
        sample["input_ids"] = tokenizer.encode(sample["formatted_messages"])
        sample["query"] = tokenizer.decode(sample["input_ids"])
+       sample["prompt"] = sample["query"]
        return sample
 
    dataset = dataset.map(tokenize, batched=False)
@@ -53,10 +54,44 @@ def compute_reward(gen_code, ref_code, work_dir):
 
     return score
 
+def grpo_reward_function(prompts, completions, completions_ids, **kwargs):
+    """
+    A wrapper for the custom reward function to be used with GRPOTrainer.
+    """
+    # Assuming 'name', 'data_dir', and 'exp_dir' are available.
+    # 'name' comes from the dataset, others need to be passed.
+    # We can use a partial function or a class to hold these states.
+    data_dir = kwargs.pop("data_dir")
+    exp_dir = kwargs.pop("exp_dir")
+    output_model_name = kwargs.pop("output_model_name")
+    
+    rewards = []
+    for i, completion in enumerate(completions):
+        # Extract the Verilog code from the completion
+        verilog_code = response_to_netlist_str(completion)
+        
+        # Get the sample's unique identifier
+        sample_name = kwargs["name"][i]
+        
+        # Define paths for generated and reference files
+        work_dir = f'{exp_dir}/RLTF/{output_model_name}/{sample_name}'
+        gen_path = f'{work_dir}/gen_{sample_name}.v'
+        ref_path = f'{data_dir}/rltf_code/{sample_name}.v'
+        
+        os.makedirs(os.path.dirname(gen_path), exist_ok=True)
+        with open(gen_path, 'w') as f:
+            f.write(verilog_code)
+
+        # Compute the reward for the single instance
+        reward = compute_reward(gen_path, ref_path, work_dir)
+        rewards.append(reward)
+
+    return rewards
+
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
-def rltf(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
+def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = 'true'
 
@@ -89,6 +124,9 @@ def rltf(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
     dataset = load_dataset("json", data_files=data_path, split="train")
     dataset = build_dataset(dataset, tokenizer)
 
+    print(dataset)
+    # print(load_dataset("trl-lib/tldr", split="train"))
+
     """
     Model
     """
@@ -98,27 +136,60 @@ def rltf(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
         "device_map": 'auto',
         "cache_dir": cache_dir,
     }
-    model = AutoModelForCausalLMWithValueHead.from_pretrained(**model_config)
-    ref_model = AutoModelForCausalLMWithValueHead.from_pretrained(**model_config)
+    model = AutoModelForCausalLM.from_pretrained(**model_config)
 
     """
-    PPO Trainer
+    GRPO Trainer
     """
-    config = PPOConfig(
+    config = GRPOConfig(
+        output_dir=os.path.join(output_model, 'GRPO'),
+        per_device_train_batch_size=8,
+        num_generations=8,
+        bf16= True if torch.cuda.is_bf16_supported() else False,
+        gradient_checkpointing=True,
+        max_completion_length=4096,
         #log_with='wandb',
-        batch_size=16,
-        mini_batch_size=1,
+        #batch_size=16,
+        #mini_batch_size=1,
         #optimize_cuda_cache=True,
         #use_score_norm=True,
         #use_score_scaling=True,
-        num_ppo_epochs = 2,
+        num_train_epochs = 2,
         remove_unused_columns=False
     )
-    ppo_trainer = PPOTrainer(args=config, model=model, ref_model=ref_model, processing_class=tokenizer, train_dataset=dataset, data_collator=collator)
-    print_trainable_parameters('RLTF', ppo_trainer.model)
+
+    # We need to pass extra arguments to our reward function.
+    # We can use a lambda or functools.partial for this.
+    # from functools import partial
+    # reward_fn = partial(
+    #     grpo_reward_function,
+    #     data_dir=data_dir,
+    #     exp_dir=exp_dir,
+    #     output_model_name=output_model
+    # )
+
+    # Use lambda to generate reward_fn
+    reward_fn = lambda prompts, completions, **kwargs: grpo_reward_function(
+        prompts, completions,
+        data_dir=data_dir,
+        exp_dir=exp_dir,
+        output_model_name=output_model,
+        **kwargs  # Pass any additional kwargs
+    )
+
+
+
+    grpo_trainer = GRPOTrainer(
+        args=config, 
+        model=model, 
+        processing_class=tokenizer, 
+        reward_funcs=reward_fn, 
+        train_dataset=dataset, 
+    )
+    print_trainable_parameters('RLTF_GRPO', grpo_trainer.model)
 
     """
-    PPO
+    GRPO
     """
     generation_kwargs = {
         "min_length": -1,
@@ -129,45 +200,13 @@ def rltf(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
         "pad_token_id": tokenizer.pad_token_id
     }
 
-    for epoch in range(config.ppo_epochs):
-        print(f'[RLTF]: Starting epoch: {epoch+1}/{config.ppo_epochs}')
-        for batch in tqdm(ppo_trainer.dataloader, "[RLTF]: Batch: "):
-            # Generate response
-            query_tensors = batch["input_ids"]
-            response_tensors = ppo_trainer.generate(
-                query_tensors, batch_size=8, return_prompt=False, generate_ref_response=False, **generation_kwargs
-            )
-            batch["response"] = tokenizer.batch_decode(response_tensors)
-
-            # Save response to netlist
-            inputs = [(
-                response,
-                f'{exp_dir}/RLTF/{output_model}/{index}/{epoch}/gen_{index}.v')
-                for index, response in zip(batch["index"], batch["response"])
-            ]
-            with multiprocessing.Pool(processes=min(config.batch_size, 16)) as pool:
-                pool.starmap(response_to_netlist, inputs)
-
-            # Compute reward
-            inputs = [(
-                f'{exp_dir}/RLTF/{output_model}/{index}/{epoch}/gen_{index}.v',
-                f'{data_dir}/rltf_code/{index}.v',
-                f'{exp_dir}/RLTF/{output_model}/{index}/{epoch}')
-                for index in batch["index"]
-            ]
-            with multiprocessing.Pool(processes=min(config.batch_size, 16)) as pool:
-                rewards = pool.starmap(compute_reward, inputs)
-            rewards = [torch.tensor(reward, dtype=torch.float32, device='cuda') for reward in rewards]
-
-            stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
-            ppo_trainer.log_stats(stats, batch, rewards)
-
-        if epoch != config.ppo_epochs-1:
-            ckpt_path = os.path.join(cache_dir, f'{output_model}_ckpt_{epoch}')
-            ppo_trainer.save_pretrained(ckpt_path)
+    print('[GRPO]: Starting training...')
+    grpo_trainer.train()
+    #grpo_trainer.train(generation_kwargs=generation_kwargs)
 
     tune_path = os.path.join(cache_dir, f'{output_model}')
-    ppo_trainer.save_pretrained(tune_path)
+    grpo_trainer.save_pretrained(tune_path)
+    print(f"[GRPO]: Training complete. Model saved to {tune_path}")
 
 def response_to_netlist(input_string, gen_path):
     os.makedirs(os.path.dirname(gen_path), exist_ok=True)
@@ -183,5 +222,18 @@ def response_to_netlist(input_string, gen_path):
     else:
         with open(gen_path, 'w') as f:
             f.write(input_string)
+
+def response_to_netlist_str(input_string):
+    """
+    Extracts Verilog code from the input string and returns it as a string.
+    If no Verilog code is found, returns the original input string.
+    """
+    pattern = r"```verilog(.*?)```"
+    match = re.search(pattern, input_string, re.DOTALL)
+
+    if match:
+        return match.group(1).strip()
+    else:
+        return input_string
 
 

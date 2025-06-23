@@ -2,6 +2,7 @@ import os
 import argparse
 from verilogos.trainer.sft import sft
 from verilogos.trainer.rltf import rltf
+from verilogos.trainer.rltf_grpo import rltf_grpo
 from verilogos.augmentator.hdl_augmentator import augment
 from verilogos.generator.hdl_generator import gen_hdl
 from verilogos.generator.jsonl_generator import gen_jsonl, gen_reasoning_jsonl
@@ -12,7 +13,7 @@ if __name__ == '__main__':
     Argument
     """
     parser = argparse.ArgumentParser(description="Improving LLM-based Verilog Code Generation with Data Augmentation and RL")
-    parser.add_argument("mode", choices=['AUG', 'SFT', 'RLTF', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
+    parser.add_argument("mode", choices=['AUG', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
     parser.add_argument("-im", "--input_model", type=str)
     parser.add_argument("-om", "--output_model", type=str)
     parser.add_argument("-d", "--data_jsonl", type=str)
@@ -68,6 +69,8 @@ if __name__ == '__main__':
         sft(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir)
     elif args.mode == "RLTF":
         rltf(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir)
+    elif args.mode == "RLTF_GRPO":
+        rltf_grpo(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir)
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
     elif args.mode == "GEN_HDL":
