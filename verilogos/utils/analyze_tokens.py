@@ -6,6 +6,9 @@ from pathlib import Path
 from transformers import AutoTokenizer, PreTrainedTokenizer
 from tqdm import tqdm
 from typing import List, Dict, Tuple, Optional
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
+import numpy as np
 
 def load_tokenizer(model_name_or_path: str) -> Optional[PreTrainedTokenizer]:
     """Loads a Hugging Face tokenizer and handles potential errors."""
@@ -154,6 +157,84 @@ def generate_console_report(df: pd.DataFrame, verbose: bool = False) -> None:
         print("\n" + "="*80)
 
 
+def save_histogram_plot(df: pd.DataFrame, output_filename: str):
+    """Generates and saves a histogram of the token count distribution."""
+    print(f"\nGenerating histogram...")
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, ax1 = plt.subplots(figsize=(12, 7))
+
+        total_generations = len(df)
+        has_reasoning_data = df['has_reasoning'].any()
+        # Determine the number of bins dynamically for better visualization
+        bins = min(max(10, len(df) // 2), 50)
+
+        if has_reasoning_data:
+            # Plot multiple distributions if reasoning data exists
+            ax1.hist(df['total_tokens'], bins='auto', alpha=0.6, label='Total Tokens')
+            #ax1.hist(df['output_tokens'], bins=bins, alpha=0.8, label='Output Tokens')
+            # Only plot reasoning tokens for generations that have them
+            #reasoning_tokens = df[df['reasoning_tokens'] > 0]['reasoning_tokens']
+            #if not reasoning_tokens.empty:
+            #    ax1.hist(reasoning_tokens, bins=bins, alpha=0.8, label='Reasoning Tokens')
+            ax1.legend()
+        else:
+            # Plot a single distribution
+            ax1.hist(df['total_tokens'], bins=bins, edgecolor='black', alpha=0.8)
+
+        ax1.set_title('Distribution of Token Counts per Generation', fontsize=16)
+        ax1.set_xlabel('Token Count', fontsize=12)
+        ax1.set_ylabel('Number of Generations (Frequency)', fontsize=12, color='C0')
+        ax1.tick_params(axis='y', labelcolor='C0')
+
+
+        # Get the current upper limit of the primary y-axis.
+        y_max = ax1.get_ylim()[1]
+        
+        # Round this limit up to the nearest "nice" number (e.g., 10, 50, 100).
+        # This gives matplotlib a clean range to work with, preventing odd limits.
+        if y_max < 10:
+            y_max_rounded = np.ceil(y_max)
+        elif y_max < 50:
+             y_max_rounded = np.ceil(y_max / 5) * 5
+        else:
+            y_max_rounded = np.ceil(y_max / 10) * 10
+        
+        # Explicitly set the y-axis limits for the primary axis.
+        ax1.set_ylim(0, y_max_rounded)
+
+        # --- Create and configure the secondary y-axis (Percentage) ---
+        ax2 = ax1.twinx()  # Create a second y-axis that shares the same x-axis
+        # Set the secondary axis limits to be perfectly proportional to the primary's.
+        # Because the ranges are now a clean ratio, matplotlib's automatic
+        # tick locator will generate aligned ticks and grids.
+        ax2.set_ylim(0, (y_max_rounded / total_generations) * 100)
+
+        # Turn off the grid for the secondary axis to use the primary's grid.
+        ax2.grid(False)
+
+        ax1_ticks = ax1.get_yticks()  # Get the ticks from the primary axis
+        # Set the secondary axis ticks to be the same as the primary's.
+        ax2_ticks = [tick / total_generations * 100 for tick in ax1_ticks if tick <= y_max_rounded]
+        ax2.set_yticks(ax2_ticks)  # Set the secondary axis ticks
+
+        
+        # Format the tick labels as percentages.
+        ax2.yaxis.set_major_formatter(mtick.PercentFormatter())
+        
+        ax2.set_ylabel('Percentage of Total Generations', fontsize=12, color='C1')
+        ax2.tick_params(axis='y', labelcolor='C1')
+
+        
+        # Save the figure to a file
+        fig.tight_layout()
+        fig.savefig(output_filename, dpi=150)
+        plt.close(fig) # Close the plot to free up memory
+        print(f"Histogram saved successfully to '{output_filename}'")
+    except Exception as e:
+        print(f"Error: Could not generate or save histogram plot: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze token counts in a structured directory of generated files.",
@@ -186,6 +267,11 @@ def main():
 
     # Save the detailed CSV report
     csv_filename = f"{base_dir.name}_gen_token_statistics.csv"
+    histogram_filename = f"{base_dir.name}_token_distribution.png"
+
+    # Save the histogram
+    save_histogram_plot(granular_df, histogram_filename)
+    print(f"\nSaving histogram plot to '{histogram_filename}'...")
     try:
         granular_df.to_csv(csv_filename, index=False)
         print(f"\nDetailed statistics saved to '{csv_filename}'")

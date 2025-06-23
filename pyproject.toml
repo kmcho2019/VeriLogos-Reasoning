@@ -9,6 +9,7 @@ dependencies = [
     "bitsandbytes>=0.45.5",
     "datasets>=2.14.0",
     "lm-deluge>=0.0.11",
+    "matplotlib>=3.10.3",
     "networkx>=3.0",
     "openai>=1.79.0",
     "pandas>=2.0.0",
