@@ -17,6 +17,10 @@ from peft import PeftModel, PeftConfig
 # Import time for retry delay
 import time
 
+# Imports for vLLM backend
+from vllm import LLM, SamplingParams
+from vllm.lora.request import LoRARequest
+
 _REGISTRY = {
     "openai":   ("https://api.openai.com/v1",      "OPENAI_API_KEY"),
     "groq":     ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
@@ -321,6 +325,83 @@ def gen_hdl(
                 
                 current_idx = indices[j]
                 code = generation_result["generated_text"]
+                _dump(code, exp_dir, model_identifier_for_paths, module_name, current_idx)
+
+    # ───────────────────────────────────────  Back-end - VLLM  ───────────────────
+    elif backend == "vllm":        
+        if not ds_for_hf:
+            print("[GEN_HDL - VLLM]: No data to process for VLLM backend after filtering. Exiting.")
+            return
+
+        print(f"[GEN_HDL - VLLM]: Processing {len(modules_to_process_names)} modules with VLLM backend.")
+
+        pretrained_path = (
+            f"{cache_dir}/{base_model_identifier}" if "VeriLogos" in base_model_identifier else base_model_identifier
+        )
+        tok = AutoTokenizer.from_pretrained(
+            pretrained_path, padding_side="left",
+            trust_remote_code=True, cache_dir=cache_dir
+        )
+        if tok.pad_token is None:
+            tok.pad_token = tok.eos_token
+
+        # Format prompts, applying chat template
+        prompts = []
+        for item in ds_for_hf:
+            templated_prompt = tok.apply_chat_template(item["messages"], tokenize=False, add_generation_prompt=True)
+            if force_thinking:
+                templated_prompt += "<think>"
+            prompts.append(templated_prompt)
+
+        if force_thinking:
+            print("[GEN_HDL - VLLM]: Appended '<think>' token to prompts to force thinking.")
+
+        # Initialize VLLM Engine
+        print(f"[GEN_HDL - VLLM]: Loading base model '{base_model_identifier}' with VLLM...")
+        llm_args = {
+            "model": pretrained_path,
+            "trust_remote_code": True,
+            "dtype": 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16',
+        }
+        if lora_weights:
+            print("[GEN_HDL - VLLM]: Enabling LoRA support in VLLM engine.")
+            llm_args["enable_lora"] = True
+            llm_args["max_loras"] = 1
+
+        llm = LLM(**llm_args)
+
+        # Set Sampling Parameters
+        sampling_params = SamplingParams(
+            n=len(indices),
+            temperature=temperature,
+            top_p=1.0,
+            top_k=50,
+            max_tokens=out_gen_length,
+            stop_token_ids=[tok.eos_token_id],
+        )
+
+        lora_request = None
+        if lora_weights:
+            lora_adapter_name = os.path.basename(os.path.normpath(lora_weights))
+            print(f"[GEN_HDL - VLLM]: Preparing LoRA request for adapter '{lora_adapter_name}' from path '{lora_weights}'.")
+            lora_request = LoRARequest(lora_name=lora_adapter_name, lora_local_path=lora_weights)
+        
+        print(f"[GEN_HDL - VLLM]: Starting generation for {len(prompts)} prompts...")
+        outputs = llm.generate(prompts, sampling_params, lora_request=lora_request)
+
+        print("[GEN_HDL - VLLM]: Generation complete. Saving results...")
+        for i, output in tqdm(enumerate(outputs), total=len(outputs)):
+            module_name = modules_to_process_names[i]
+            
+            if len(output.outputs) != len(indices):
+                print(f"[GEN_HDL - VLLM]: Warning: Model returned {len(output.outputs)} sequences for module '{module_name}', but {len(indices)} were requested.")
+
+            for j, generation_result in enumerate(output.outputs):
+                if j >= len(indices):
+                    break
+                
+                current_idx = indices[j]
+                code = generation_result.text
                 _dump(code, exp_dir, model_identifier_for_paths, module_name, current_idx)
 
     # ───────────────────────────────────  Back-end - OpenAI  ───────────────────

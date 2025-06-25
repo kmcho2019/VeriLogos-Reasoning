@@ -25,7 +25,7 @@ if __name__ == '__main__':
     parser.add_argument("-if", "--input_file", type=str)
     parser.add_argument("-of", "--output_file", type=str)
     parser.add_argument("-it", "--iter", type=int)
-    parser.add_argument("-be", "--backend", type=str, default="hf", choices=["hf", "api"], help="Backend for model generation: Hugging Face or OpenAI")
+    parser.add_argument("-be", "--backend", type=str, default="hf", choices=["hf", "api", "vllm"], help="Backend for model generation: Hugging Face or OpenAI API or vLLM") # New arg
     parser.add_argument("-ap", "--api_provider", type=str, default="openai", choices=["openai", "together", "fireworks", "deepseek", "openrouter", "gemini"], help="External API provider for synthetic trace generation") # New arg
     parser.add_argument("-ak", "--api_key", type=str, default=None, help="API key for the External LLM API provider") # New arg
     parser.add_argument("--reference_code_dir", type=str, help="Directory containing reference Verilog snippets for trace generation") # New arg
