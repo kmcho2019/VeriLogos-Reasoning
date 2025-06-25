@@ -361,7 +361,7 @@ def gen_hdl(
         llm_args = {
             "model": pretrained_path,
             "trust_remote_code": True,
-            "dtype": 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16',
+            "dtype": 'bfloat16' if (torch.cuda.get_device_capability()[0] >= 8) and (torch.cuda.is_bf16_supported()) else 'float16',
         }
         if lora_weights:
             print("[GEN_HDL - VLLM]: Enabling LoRA support in VLLM engine.")

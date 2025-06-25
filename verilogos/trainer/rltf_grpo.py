@@ -150,7 +150,7 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
         output_dir=os.path.join(output_model, 'GRPO'),
         per_device_train_batch_size=2,
         num_generations=4,
-        bf16= True if torch.cuda.is_bf16_supported() else False,
+        bf16= True if (torch.cuda.get_device_capability()[0] >= 8) and (torch.cuda.is_bf16_supported()) else False,
         gradient_checkpointing=True,
         max_completion_length=4096,
         temperature=0.2,

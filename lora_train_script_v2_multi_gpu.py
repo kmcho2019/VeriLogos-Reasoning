@@ -211,8 +211,8 @@ def fine_tune_model(model, tokenizer, dataset, output_dir):
         save_strategy="epoch",
         do_train=True,
         do_eval=True,
-        bf16=torch.cuda.is_bf16_supported(), # Enable bfloat16 if supported
-        fp16=not torch.cuda.is_bf16_supported() and torch.cuda.is_available(), # Fallback to fp16 if bfloat16 not supported
+        bf16=(torch.cuda.get_device_capability()[0] >= 8) and (torch.cuda.is_bf16_supported()), # Enable bfloat16 if supported
+        fp16=not (torch.cuda.get_device_capability()[0] >= 8) and (torch.cuda.is_bf16_supported()) and torch.cuda.is_available(), # Fallback to fp16 if bfloat16 not supported
         gradient_accumulation_steps=8, # Effective batch size = 1 (batch_size) * num_gpus * 8
         learning_rate=2e-5,
         weight_decay=0.01,
