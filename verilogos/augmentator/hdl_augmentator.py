@@ -83,37 +83,96 @@ def augment(prob, num_aug, data_dir, exp_dir):
                 log_file.write(error + "\n")
         print(f'[AUG]: Augmentation errors saved to: {error_log_path}')
 
-def augment_custom(prob, num_aug, data_dir, exp_dir, augment_source='code'):
-    print(f'[AUG_CUSTOM]: Augmenting Verilog files in {data_dir} with prob={prob} and num_aug={num_aug}.')
+def worker_wrapper(code_info):
+    """
+    A wrapper around augment_code to associate its output with its input.
+    """
+    # Call the original function
+    codes_result, errors_result = augment_code(code_info)
+    # Return the original input path along with the results
+    input_path = code_info[0]
+    return input_path, codes_result, errors_result
+
+
+def augment_custom(prob, num_aug, data_dir, exp_dir, augment_source='code', max_retries=10):
+    """
+    Augments Verilog files with a retry mechanism for failed instances.
+
+    Args:
+        prob (float): The probability of applying an augmentation.
+        num_aug (int): The number of augmented versions to generate per file.
+        data_dir (str): The directory containing the source code.
+        exp_dir (str): The directory to save experiment results and logs.
+        augment_source (str, optional): The sub-directory containing .v files. Defaults to 'code'.
+        max_retries (int, optional): The maximum number of times to retry failed files. Defaults to 3.
+    """
+    print(f'[AUG_CUSTOM]: Augmenting Verilog files in {data_dir} with prob={prob}, num_aug={num_aug}, and max_retries={max_retries}.')
+
 
     code_paths = sorted([os.path.join(f'{data_dir}/{augment_source}', f) for f in os.listdir(f'{data_dir}/{augment_source}') if f.endswith('.v')])
-    code_infos = [(code_path, prob, num_aug) for code_path in code_paths]
+    
+    # List of files that need to be processed. Initially, it's all of them.
+    files_to_process = [(path, prob, num_aug) for path in code_paths]
+    
+    successful_results = []
+    permanent_errors = []
+    
+    retry_attempt = 0
+    while files_to_process and retry_attempt <= max_retries:
+        if retry_attempt > 0:
+            print(f"\n[AUG_CUSTOM]: Retrying {len(files_to_process)} failed files... (Attempt {retry_attempt}/{max_retries})")
+            #time.sleep(2) # Small delay before retrying
 
-    results, errors = [], []
+        failed_in_this_run = []
+        
+        with Pool(processes=64) as pool:
+            # Use tqdm to show progress for the current batch
+            progress_bar = tqdm(pool.imap_unordered(worker_wrapper, files_to_process), total=len(files_to_process), desc=f"Attempt {retry_attempt}")
+            
+            for code_path, result, error in progress_bar:
+                if error:
+                    # Find the original code_info to add it for the next retry attempt
+                    original_info = next((item for item in files_to_process if item[0] == code_path), None)
+                    if original_info:
+                        failed_in_this_run.append((original_info, error))
+                else:
+                    successful_results.extend(result)
+        
+        # Prepare for the next iteration
+        if failed_in_this_run:
+            # Update the list of files to process for the next retry
+            files_to_process = [info for info, err in failed_in_this_run]
+            
+            # If this is the last attempt, move remaining failures to permanent errors
+            if retry_attempt == max_retries:
+                for info, err_list in failed_in_this_run:
+                    permanent_errors.extend(err_list)
+                print(f"\n[AUG_CUSTOM]: Max retries reached. {len(permanent_errors)} files failed permanently.")
+                break # Exit the while loop
+        else:
+            # If nothing failed, we are done.
+            print("\n[AUG_CUSTOM]: All files processed successfully!")
+            files_to_process = [] # Empty the list to exit the while loop
 
-    with Pool(processes=64) as pool:
-        for result, error in tqdm(pool.imap_unordered(augment_code, code_infos), total=len(code_infos)):
-            if result:
-                results.extend(result)
-            if error:
-                errors.extend(error)
+        retry_attempt += 1
 
-    augmented_df = pd.DataFrame(columns=['source', 'code'])
-    for source, code in results:
-        new_row = pd.DataFrame([{'source': source, 'code': code}])
-        augmented_df = pd.concat([augmented_df, new_row], ignore_index=True)
+    # --- Save results ---
+    output_dir = os.path.join(exp_dir, f'{augment_source}_augmentation')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    print(f"\n[AUG_CUSTOM]: Writing {len(successful_results)} successful augmentations to CSV...")
+    augmented_df = pd.DataFrame(successful_results, columns=['source', 'code'])
+    augmented_df = augmented_df.sort_values(by='source').reset_index(drop=True)
 
-    augmented_df = augmented_df.sort_values(by='source')
-
-    output_file_path = os.path.join(exp_dir, f'{augment_source}_augmentation', 'results.csv')
-    # Create directory if it doesn't exist
-    os.makedirs(os.path.join(exp_dir, f'{augment_source}_augmentation'), exist_ok=True)
+    output_file_path = os.path.join(output_dir, 'results.csv')
     augmented_df.to_csv(output_file_path, index=False)
     print(f'[AUG_CUSTOM]: Augmentation results saved to: {output_file_path}')
 
-    if errors:
-        error_log_path = os.path.join(exp_dir, f'{augment_source}_augmentation', 'errors.log')
+    # --- Save permanent errors if any ---
+    if permanent_errors:
+        error_log_path = os.path.join(output_dir, 'errors.log')
+        print(f'[AUG_CUSTOM]: Saving {len(permanent_errors)} permanent errors to: {error_log_path}')
         with open(error_log_path, 'w') as log_file:
-            for error in errors:
+            for error in permanent_errors:
                 log_file.write(error + "\n")
-        print(f'[AUG_CUSTOM]: Augmentation errors saved to: {error_log_path}')
+
