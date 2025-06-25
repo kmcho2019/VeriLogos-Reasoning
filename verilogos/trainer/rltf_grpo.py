@@ -54,7 +54,7 @@ def compute_reward(gen_code, ref_code, work_dir):
 
     return score
 
-def grpo_reward_function(prompts, completions, completions_ids, **kwargs):
+def grpo_reward_function(prompts, completions, **kwargs):
     """
     A wrapper for the custom reward function to be used with GRPOTrainer.
     """
@@ -76,11 +76,14 @@ def grpo_reward_function(prompts, completions, completions_ids, **kwargs):
         # Define paths for generated and reference files
         work_dir = f'{exp_dir}/RLTF/{output_model_name}/{sample_name}'
         gen_path = f'{work_dir}/gen_{sample_name}.v'
+        gen_path_raw = f'{work_dir}/gen_{sample_name}_raw.txt'
         ref_path = f'{data_dir}/rltf_code/{sample_name}.v'
         
         os.makedirs(os.path.dirname(gen_path), exist_ok=True)
         with open(gen_path, 'w') as f:
             f.write(verilog_code)
+        with open(gen_path_raw, 'w') as f:
+            f.write(completion)
 
         # Compute the reward for the single instance
         reward = compute_reward(gen_path, ref_path, work_dir)
@@ -92,6 +95,8 @@ def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
 def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
+    # Set environment variables for better performance and to avoid warnings
+    torch.set_float32_matmul_precision('high')
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = 'true'
 
@@ -133,7 +138,7 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
     model_config = {
         "pretrained_model_name_or_path": pretrained_model_name_or_path,
         "torch_dtype": "auto",
-        "device_map": 'auto',
+        #"device_map": 'auto',
         "cache_dir": cache_dir,
     }
     model = AutoModelForCausalLM.from_pretrained(**model_config)
@@ -143,18 +148,21 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
     """
     config = GRPOConfig(
         output_dir=os.path.join(output_model, 'GRPO'),
-        per_device_train_batch_size=8,
-        num_generations=8,
+        per_device_train_batch_size=2,
+        num_generations=4,
         bf16= True if torch.cuda.is_bf16_supported() else False,
         gradient_checkpointing=True,
         max_completion_length=4096,
+        temperature=0.2,
+        top_p=0.95,
+        top_k=50,
         #log_with='wandb',
         #batch_size=16,
         #mini_batch_size=1,
         #optimize_cuda_cache=True,
         #use_score_norm=True,
         #use_score_scaling=True,
-        num_train_epochs = 2,
+        num_train_epochs = 1,
         remove_unused_columns=False
     )
 
@@ -200,13 +208,13 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
         "pad_token_id": tokenizer.pad_token_id
     }
 
-    print('[GRPO]: Starting training...')
+    print('[RLTF_GRPO]: Starting training...')
     grpo_trainer.train()
     #grpo_trainer.train(generation_kwargs=generation_kwargs)
 
     tune_path = os.path.join(cache_dir, f'{output_model}')
     grpo_trainer.save_pretrained(tune_path)
-    print(f"[GRPO]: Training complete. Model saved to {tune_path}")
+    print(f"[RLTF_GRPO]: Training complete. Model saved to {tune_path}")
 
 def response_to_netlist(input_string, gen_path):
     os.makedirs(os.path.dirname(gen_path), exist_ok=True)
