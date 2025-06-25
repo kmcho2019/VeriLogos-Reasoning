@@ -45,7 +45,7 @@ if __name__ == '__main__':
     parser.add_argument("-rff", "--resume_from_file", type=str, default=None, help="Resume hdl generation from a specific file, useful if there is a specific list of modules to generate") # New arg
     parser.add_argument("-gl", "--generation_length", type=int, default=4096, help="Set the maximum number of output token generated during hdl generation (GEN_HDL) mode (default: 4096)")
     parser.add_argument("-as", "--augment_source", type=str, default="code", help="Source for augmentation(AUG_CUSTOM): 'code' for default code directory or 'custom' for user-specified directory located within ./data directory, the directory must consist of .v files only no nested directories (default: 'code')") # New arg
-
+    parser.add_argument("-vgi", "--vllm_gpu_ids", type=int, nargs='+', default=None, help="For VLLM backend, specific GPU IDs to use. This will set CUDA_VISIBLE_DEVICES internally, this also enables vLLM tensor parallelism for the number of gpus [GEN_HDL-VLLM]") # New arg
 
     args = parser.parse_args()
 
@@ -80,7 +80,7 @@ if __name__ == '__main__':
         gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, 
                 args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, 
                 args.batch_inference, args.hf_batch_size, args.force_thinking, args.temperature, args.lora_weights,
-                args.create_resume_file, args.resume_from_file, args.generation_length)
+                args.create_resume_file, args.resume_from_file, args.generation_length, args.vllm_gpu_ids)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":

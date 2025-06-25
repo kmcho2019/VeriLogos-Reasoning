@@ -63,6 +63,7 @@ def gen_hdl(
     create_resume_file=None,# Path to save a file with names of unfinished modules
     resume_from_file=None,  # Path to a file with module names to process
     out_gen_length=4096,    # Number of output tokens generated
+    vllm_gpu_ids=None,      # For VLLM backend, specific GPU IDs to use also enables tensor parallelism
     **provider_kw,
 ):
     """
@@ -71,6 +72,13 @@ def gen_hdl(
     Supports batching for Hugging Face backend and lm-deluge for API backend.
     MODIFIED: Now supports passing a list of integers to idx_code to generate multiple files.
     """
+    # Set CUDA environment for VLLM if specific GPU IDs are provided.
+    # This must be done before VLLM or PyTorch initializes the CUDA context.
+    if vllm_gpu_ids:        
+        gpu_ids_str = ",".join(map(str, vllm_gpu_ids))
+        print(f"[GEN_HDL]: Setting CUDA_VISIBLE_DEVICES='{gpu_ids_str}' for VLLM.")
+        os.environ["CUDA_VISIBLE_DEVICES"] = gpu_ids_str
+
     # MODIFIED: Handle both integer and list for idx_code
     if isinstance(idx_code, int):
         indices = [idx_code]
@@ -362,6 +370,7 @@ def gen_hdl(
             "model": pretrained_path,
             "trust_remote_code": True,
             "dtype": 'bfloat16' if (torch.cuda.get_device_capability()[0] >= 8) and (torch.cuda.is_bf16_supported()) else 'float16',
+            "tensor_parallel_size": len(vllm_gpu_ids) if vllm_gpu_ids else 1, # Enable tensor parallelism if multiple GPUs are specified
         }
         if lora_weights:
             print("[GEN_HDL - VLLM]: Enabling LoRA support in VLLM engine.")
