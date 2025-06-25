@@ -393,7 +393,7 @@ def gen_hdl(
         if lora_weights:
             lora_adapter_name = os.path.basename(os.path.normpath(lora_weights))
             print(f"[GEN_HDL - VLLM]: Preparing LoRA request for adapter '{lora_adapter_name}' from path '{lora_weights}'.")
-            lora_request = LoRARequest(lora_name=lora_adapter_name, lora_local_path=lora_weights)
+            lora_request = LoRARequest(lora_name=lora_adapter_name, lora_int_id=1, lora_local_path=lora_weights)
         
         print(f"[GEN_HDL - VLLM]: Starting generation for {len(prompts)} prompts...")
         outputs = llm.generate(prompts, sampling_params, lora_request=lora_request)
