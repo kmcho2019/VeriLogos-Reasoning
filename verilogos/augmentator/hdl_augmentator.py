@@ -83,3 +83,37 @@ def augment(prob, num_aug, data_dir, exp_dir):
                 log_file.write(error + "\n")
         print(f'[AUG]: Augmentation errors saved to: {error_log_path}')
 
+def augment_custom(prob, num_aug, data_dir, exp_dir, augment_source='code'):
+    print(f'[AUG_CUSTOM]: Augmenting Verilog files in {data_dir} with prob={prob} and num_aug={num_aug}.')
+
+    code_paths = sorted([os.path.join(f'{data_dir}/{augment_source}', f) for f in os.listdir(f'{data_dir}/{augment_source}') if f.endswith('.v')])
+    code_infos = [(code_path, prob, num_aug) for code_path in code_paths]
+
+    results, errors = [], []
+
+    with Pool(processes=64) as pool:
+        for result, error in tqdm(pool.imap_unordered(augment_code, code_infos), total=len(code_infos)):
+            if result:
+                results.extend(result)
+            if error:
+                errors.extend(error)
+
+    augmented_df = pd.DataFrame(columns=['source', 'code'])
+    for source, code in results:
+        new_row = pd.DataFrame([{'source': source, 'code': code}])
+        augmented_df = pd.concat([augmented_df, new_row], ignore_index=True)
+
+    augmented_df = augmented_df.sort_values(by='source')
+
+    output_file_path = os.path.join(exp_dir, f'{augment_source}_augmentation', 'results.csv')
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.join(exp_dir, f'{augment_source}_augmentation'), exist_ok=True)
+    augmented_df.to_csv(output_file_path, index=False)
+    print(f'[AUG_CUSTOM]: Augmentation results saved to: {output_file_path}')
+
+    if errors:
+        error_log_path = os.path.join(exp_dir, f'{augment_source}_augmentation', 'errors.log')
+        with open(error_log_path, 'w') as log_file:
+            for error in errors:
+                log_file.write(error + "\n")
+        print(f'[AUG_CUSTOM]: Augmentation errors saved to: {error_log_path}')

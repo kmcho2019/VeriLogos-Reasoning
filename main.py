@@ -3,7 +3,7 @@ import argparse
 from verilogos.trainer.sft import sft
 from verilogos.trainer.rltf import rltf
 from verilogos.trainer.rltf_grpo import rltf_grpo
-from verilogos.augmentator.hdl_augmentator import augment
+from verilogos.augmentator.hdl_augmentator import augment, augment_custom
 from verilogos.generator.hdl_generator import gen_hdl
 from verilogos.generator.jsonl_generator import gen_jsonl, gen_reasoning_jsonl
 from verilogos.evaluator.hdl_evaluator import evaluate
@@ -13,11 +13,11 @@ if __name__ == '__main__':
     Argument
     """
     parser = argparse.ArgumentParser(description="Improving LLM-based Verilog Code Generation with Data Augmentation and RL")
-    parser.add_argument("mode", choices=['AUG', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
+    parser.add_argument("mode", choices=['AUG', 'AUG_CUSTOM', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
     parser.add_argument("-im", "--input_model", type=str)
     parser.add_argument("-om", "--output_model", type=str)
     parser.add_argument("-d", "--data_jsonl", type=str)
-    parser.add_argument("-i", "--idx", type=int)
+    parser.add_argument("-i", "--idx", type=int, nargs='+', help="One or more integer indices for file generation (e.g., -i 0 1 2).")
     parser.add_argument("-x", "--suffix", type=str)
     parser.add_argument("-mp", "--multiprocess", type=bool, default=False)
     parser.add_argument("-np", "--num_process", type=int)
@@ -44,6 +44,7 @@ if __name__ == '__main__':
     parser.add_argument("-crf","--create_resume_file", type=str, default=None, help="Create a resume file consisting of all unfinished modules in the current directory, useful for resuming generation later, exits after just creating the file") # New arg
     parser.add_argument("-rff", "--resume_from_file", type=str, default=None, help="Resume hdl generation from a specific file, useful if there is a specific list of modules to generate") # New arg
     parser.add_argument("-gl", "--generation_length", type=int, default=4096, help="Set the maximum number of output token generated during hdl generation (GEN_HDL) mode (default: 4096)")
+    parser.add_argument("-as", "--augment_source", type=str, default="code", help="Source for augmentation(AUG_CUSTOM): 'code' for default code directory or 'custom' for user-specified directory located within ./data directory, the directory must consist of .v files only no nested directories (default: 'code')") # New arg
 
 
     args = parser.parse_args()
@@ -65,6 +66,8 @@ if __name__ == '__main__':
     """
     if args.mode == "AUG":
         augment(0.5, 1, data_dir, exp_dir)
+    elif args.mode == "AUG_CUSTOM": # Custom augmentation mode, able to select directory instead of it being fixed to data/code
+        augment_custom(0.5, 1, data_dir, exp_dir, args.augment_source)
     elif args.mode == "SFT":
         sft(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir)
     elif args.mode == "RLTF":
