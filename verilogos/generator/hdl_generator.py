@@ -99,7 +99,7 @@ def gen_hdl(
 
     # Determine the model identifier for saving paths
     lora_adapter_name_part = ""
-    if backend == "hf" and lora_weights:
+    if (backend == "hf" or backend == "vllm") and lora_weights:
         lora_adapter_path_for_name = lora_weights
         if os.path.isfile(lora_weights):
              lora_adapter_path_for_name = os.path.dirname(lora_weights)
