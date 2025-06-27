@@ -3,7 +3,7 @@ import argparse
 from verilogos.trainer.sft import sft
 from verilogos.trainer.rltf import rltf
 from verilogos.trainer.rltf_grpo import rltf_grpo
-from verilogos.augmentator.hdl_augmentator import augment, augment_custom
+from verilogos.augmentator.hdl_augmentator import augment, augment_custom, augment_custom_variants
 from verilogos.generator.hdl_generator import gen_hdl
 from verilogos.generator.jsonl_generator import gen_jsonl, gen_reasoning_jsonl
 from verilogos.evaluator.hdl_evaluator import evaluate
@@ -13,7 +13,7 @@ if __name__ == '__main__':
     Argument
     """
     parser = argparse.ArgumentParser(description="Improving LLM-based Verilog Code Generation with Data Augmentation and RL")
-    parser.add_argument("mode", choices=['AUG', 'AUG_CUSTOM', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
+    parser.add_argument("mode", choices=['AUG', 'AUG_CUSTOM', 'AUG_CUSTOM_VARIANTS', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
     parser.add_argument("-im", "--input_model", type=str)
     parser.add_argument("-om", "--output_model", type=str)
     parser.add_argument("-d", "--data_jsonl", type=str)
@@ -68,6 +68,8 @@ if __name__ == '__main__':
         augment(0.5, 1, data_dir, exp_dir)
     elif args.mode == "AUG_CUSTOM": # Custom augmentation mode, able to select directory instead of it being fixed to data/code
         augment_custom(0.5, 1, data_dir, exp_dir, args.augment_source)
+    elif args.mode == "AUG_CUSTOM_VARIANTS": # Custom augmentation mode, able to select directory instead of it being fixed to data/code, this mode generates multiple defined variants of the same module
+        augment_custom_variants(2, data_dir, exp_dir, args.augment_source)
     elif args.mode == "SFT":
         sft(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir)
     elif args.mode == "RLTF":
