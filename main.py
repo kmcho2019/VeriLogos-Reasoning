@@ -46,6 +46,7 @@ if __name__ == '__main__':
     parser.add_argument("-gl", "--generation_length", type=int, default=4096, help="Set the maximum number of output token generated during hdl generation (GEN_HDL) mode (default: 4096)")
     parser.add_argument("-as", "--augment_source", type=str, default="code", help="Source for augmentation(AUG_CUSTOM): 'code' for default code directory or 'custom' for user-specified directory located within ./data directory, the directory must consist of .v files only no nested directories (default: 'code')") # New arg
     parser.add_argument("-vgi", "--vllm_gpu_ids", type=int, nargs='+', default=None, help="For VLLM backend, specific GPU IDs to use. This will set CUDA_VISIBLE_DEVICES internally, this also enables vLLM tensor parallelism for the number of gpus [GEN_HDL-VLLM]") # New arg
+    parser.add_argument("-gvc", "--grpo_vllm_colocate", action='store_true', help="For RLTF_GRPO mode, enable vLLM integration under colocate mode, where the vLLM runs inside the trainer process (default: False)") # New arg
 
     args = parser.parse_args()
 
@@ -75,7 +76,7 @@ if __name__ == '__main__':
     elif args.mode == "RLTF":
         rltf(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir)
     elif args.mode == "RLTF_GRPO":
-        rltf_grpo(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir)
+        rltf_grpo(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir, args.grpo_vllm_colocate)
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
     elif args.mode == "GEN_HDL":

@@ -20,7 +20,7 @@ dependencies = [
     "torch>=2.7.0",
     "tqdm>=4.67.1",
     "transformers>=4.35.0",
-    "trl>=0.7.0",
+    "trl[vllm]==0.19.0",
     "vllm>=0.9.1",
     "wandb>=0.19.11",
 ]

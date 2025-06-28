@@ -64,21 +64,21 @@ def grpo_reward_function(prompts, completions, **kwargs):
     data_dir = kwargs.pop("data_dir")
     exp_dir = kwargs.pop("exp_dir")
     output_model_name = kwargs.pop("output_model_name")
-    
+
     rewards = []
     for i, completion in enumerate(completions):
         # Extract the Verilog code from the completion
         verilog_code = response_to_netlist_str(completion)
-        
+
         # Get the sample's unique identifier
         sample_name = kwargs["name"][i]
-        
+
         # Define paths for generated and reference files
         work_dir = f'{exp_dir}/RLTF/{output_model_name}/{sample_name}'
         gen_path = f'{work_dir}/gen_{sample_name}.v'
         gen_path_raw = f'{work_dir}/gen_{sample_name}_raw.txt'
         ref_path = f'{data_dir}/rltf_code/{sample_name}.v'
-        
+
         os.makedirs(os.path.dirname(gen_path), exist_ok=True)
         with open(gen_path, 'w') as f:
             f.write(verilog_code)
@@ -94,7 +94,7 @@ def grpo_reward_function(prompts, completions, **kwargs):
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
-def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir):
+def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_dir, grpo_vllm_colocate):
     # Set environment variables for better performance and to avoid warnings
     torch.set_float32_matmul_precision('high')
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -108,6 +108,19 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
         pretrained_model_name_or_path = input_model
     print(f'[RLTF]: Running RLTF [{input_model} >> {output_model}]')
 
+    use_vllm = False
+    vllm_mode = "server"
+    if grpo_vllm_colocate:
+        # Enables vLLM integration under colocate mode, where the vLLM runs inside the trainer process
+        # Set environment variables for colocate mode
+        print(f'[RLTF_GRPO]: Using vLLM colocate mode for GRPO training')
+        os.environ["RANK"] = "0"
+        os.environ["LOCAL_RANK"] = "0"
+        os.environ["WORLD_SIZE"] = "1"
+        os.environ["MASTER_ADDR"] = "localhost"
+        os.environ["MASTER_PORT"] = "12355"
+        use_vllm = True
+        vllm_mode = "colocate"
     """
     wandb
     """
@@ -163,7 +176,11 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
         #use_score_norm=True,
         #use_score_scaling=True,
         num_train_epochs = 1,
-        remove_unused_columns=False
+        remove_unused_columns=False,
+        use_vllm= use_vllm, # Use vLLM for GRPO
+        vllm_mode=vllm_mode, # Set vLLM mode to 'colocate' if grpo_vllm_colocate is True, otherwise 'server'
+        #vllm_server_host="20.0.0.101", # Past experiment where server mode was tried with vllm on gpu-1 training done on gpu-8 but it didn't work, so pivoted to colocate mode
+        #vllm_server_port=8000, # Also modified in trl/trainer/grpo_trainer.py (trl==0.17.0) to set the group_port of VLLMClient to be 8080 as the default 51216 didn't work with our lab server # Past experiment where server mode was tried with vllm on gpu-1 training done on gpu-8 but it didn't work, so pivoted to colocate mode, the code change has been reverted to use the default port 51216
     )
 
     # We need to pass extra arguments to our reward function.
@@ -188,11 +205,11 @@ def rltf_grpo(input_model, output_model, data_jsonl, cache_dir, data_dir, exp_di
 
 
     grpo_trainer = GRPOTrainer(
-        args=config, 
-        model=model, 
-        processing_class=tokenizer, 
-        reward_funcs=reward_fn, 
-        train_dataset=dataset, 
+        args=config,
+        model=model,
+        processing_class=tokenizer,
+        reward_funcs=reward_fn,
+        train_dataset=dataset,
     )
     print_trainable_parameters('RLTF_GRPO', grpo_trainer.model)
 
