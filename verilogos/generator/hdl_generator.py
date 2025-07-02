@@ -21,6 +21,56 @@ import time
 from vllm import LLM, SamplingParams
 from vllm.lora.request import LoRARequest
 
+# Imports for logit processor used for thinking limit
+from typing import List, Optional
+
+# Inspired by https://github.com/vllm-project/vllm/issues/15418
+class ThinkLogitsProcessor:
+    """A logits processor that limit the number of thinking tokens."""
+    
+    def __init__(self, think_start_token, think_end_token, num_think_tokens: int = 100):
+        """
+        Initialize the think logits processor.
+        
+        Args:
+            tokenizer: The tokenizer used for the model
+            num_think_tokens: Maximum number of tokens allowed in thinking section
+        """
+        self.num_think_tokens = num_think_tokens
+        self.think_start_token = think_start_token
+        self.think_end_token = think_end_token
+        
+    def __call__(
+        self,
+        input_ids: List[int],
+        logits: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Process the logits to enforce </think> token when needed.
+        
+        Args:
+            input_ids: List of input token IDs.
+            logits: Tensor of logits for the next token.
+            
+        Returns:
+            Processed logits tensor.
+        """
+        # Check if we're in a thinking section
+        if self.think_start_token in input_ids and self.think_end_token not in input_ids:
+            # Find the position of the last <think> token
+            think_start_pos = len(input_ids) - 1 - input_ids[::-1].index(self.think_start_token)
+            
+            # Calculate number of tokens since <think>
+            tokens_since_think = len(input_ids) - think_start_pos - 1
+            
+            # If we've reached the maximum thinking length, force </think>
+            if tokens_since_think >= self.num_think_tokens:
+                # Set all other logits to -inf except for </think>
+                logits = torch.full_like(logits, float('-inf'))
+                logits[self.think_end_token] = 1.0
+                
+        return logits 
+
 _REGISTRY = {
     "openai":   ("https://api.openai.com/v1",      "OPENAI_API_KEY"),
     "groq":     ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
@@ -64,6 +114,7 @@ def gen_hdl(
     resume_from_file=None,  # Path to a file with module names to process
     out_gen_length=4096,    # Number of output tokens generated
     vllm_gpu_ids=None,      # For VLLM backend, specific GPU IDs to use also enables tensor parallelism
+    vllm_thinking_limit=None, # For VLLM backend, max number of thinking tokens before generating HDL code after detecting <think> take insert </think> forcibly after the limit
     **provider_kw,
 ):
     """
@@ -379,6 +430,22 @@ def gen_hdl(
 
         llm = LLM(**llm_args)
 
+        # Setup logit processor for thinking limit if specified
+        if vllm_thinking_limit is not None:
+            think_start_token_string = "<think>"
+            think_end_token_string = "</think>"
+            think_start_token = tok.encode(think_start_token_string, add_special_tokens=False)[0]
+            think_end_token = tok.encode(think_end_token_string, add_special_tokens=False)[0]
+            print(f"[GEN_HDL - VLLM]: Setting up thinking limit with start token ({think_start_token_string}) '{think_start_token}' and end token ({think_end_token_string}) '{think_end_token}'. Max thinking tokens: {vllm_thinking_limit}")
+            think_logit_processor = [ThinkLogitsProcessor(
+                think_start_token=think_start_token,
+                think_end_token=think_end_token,
+                num_think_tokens=vllm_thinking_limit
+            )]
+        else:
+            think_logit_processor = None
+            print("[GEN_HDL - VLLM]: No thinking limit set. Will not enforce thinking tokens.")
+
         # Set Sampling Parameters
         sampling_params = SamplingParams(
             n=len(indices),
@@ -387,6 +454,7 @@ def gen_hdl(
             top_k=50,
             max_tokens=out_gen_length,
             stop_token_ids=[tok.eos_token_id],
+            logits_processors= think_logit_processor
         )
 
         lora_request = None
