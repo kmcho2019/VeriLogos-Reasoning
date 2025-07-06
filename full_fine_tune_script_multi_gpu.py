@@ -158,7 +158,7 @@ def fine_tune_model(model, tokenizer, dataset, output_dir):
         save_total_limit=2,
         logging_dir=os.path.join(output_dir, "logs"),
         logging_steps=5,
-        load_best_model_at_end=True,
+        load_best_model_at_end=False, # When set to True might have caused errors during at the end of zero3 training when saving model
         save_strategy="epoch",
         do_train=True,
         do_eval=True,
@@ -230,6 +230,9 @@ def main(args):
         return
 
     fine_tune_model(model, tokenizer, tokenized_dataset, final_output_dir)
+    # As backup during distributed model saving save the rank 0 model at the end of training
+    if torch.distributed.get_rank() == 0:
+        save_model(model, tokenizer, os.path.join(final_output_dir, "rank_0_model_save"))
     save_model(model, tokenizer, final_output_dir)
     print("Full model fine-tuning complete.")
 
