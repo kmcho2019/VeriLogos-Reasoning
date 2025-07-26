@@ -13,7 +13,7 @@ if __name__ == '__main__':
     Argument
     """
     parser = argparse.ArgumentParser(description="Improving LLM-based Verilog Code Generation with Data Augmentation and RL")
-    parser.add_argument("mode", choices=['AUG', 'AUG_CUSTOM', 'AUG_CUSTOM_VARIANTS', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
+    parser.add_argument("mode", choices=['AUG', 'AUG_CUSTOM', 'AUG_CUSTOM_VARIANTS', 'SFT', 'RLTF', 'RLTF_GRPO', 'EVAL', 'EVALv2', 'GEN_HDL', 'GEN_SFT_JSONL', 'GEN_RLTF_JSONL', 'GEN_SFT_CUSTOM_JSONL', 'GEN_REASONING_JSONL', 'FINETUNE_VERILOG_COMPLETION'])
     parser.add_argument("-im", "--input_model", type=str)
     parser.add_argument("-om", "--output_model", type=str)
     parser.add_argument("-d", "--data_jsonl", type=str)
@@ -48,6 +48,7 @@ if __name__ == '__main__':
     parser.add_argument("-vgi", "--vllm_gpu_ids", type=int, nargs='+', default=None, help="For VLLM backend, specific GPU IDs to use. This will set CUDA_VISIBLE_DEVICES internally, this also enables vLLM tensor parallelism for the number of gpus (GEN_HDL-VLLM)") # New arg
     parser.add_argument("-vtl", "--vllm_thinking_limit", type=int, default=None, help="For VLLM backend (GEN_HDL-VLLM), the maximum number of thinking tokens to generate before generating the actual HDL code, forcibly insert </think> after the limit if enabled, not applied to other backends like hf or api (vLLM v1 engine does not support logit processors yet so v0 must be used to enable this feature, VLLM_USE_V1=0) (default: None)") # New arg
     parser.add_argument("-gvc", "--grpo_vllm_colocate", action='store_true', help="For RLTF_GRPO mode, enable vLLM integration under colocate mode, where the vLLM runs inside the trainer process (default: False)") # New arg
+    parser.add_argument("-gs", "--generate_hdl_output_dir_suffix", type=str, default=None, help="Optional suffix for the hdl generation output directory name for (GEN_HDL) mode (default: None)")
 
     args = parser.parse_args()
 
@@ -80,12 +81,18 @@ if __name__ == '__main__':
         rltf_grpo(args.input_model, args.output_model, args.data_jsonl, cache_dir, data_dir, exp_dir, args.grpo_vllm_colocate)
     elif args.mode == "EVAL":
         evaluate(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
+    elif args.mode == "EVALv2":
+        pass  # Placeholder for EVALv2 mode, not implemented yet
+        # Meant to use actual testbenches from VerilogEval and RTLLM instead of formal verification (Synopsys Formality)
+        # Planning on incorporating implementation made in EoR (REvolution repo) which uses VerilogEval and RTLLM testbenches along with iverilog for simulation
+        # More scalable and easier to replicate than formal verification
+        # evaluate_v2(args.input_model, num_code, data_dir, exp_dir, args.eval_source_list, parse_module_name_from_content=args.eval_parse_module_name)
     elif args.mode == "GEN_HDL":
         gen_hdl(args.input_model, args.data_jsonl, args.idx, cache_dir, data_dir, exp_dir, args.num_process, 
                 args.idx_process, args.backend, args.api_provider, args.api_key, args.resume_generation, 
                 args.batch_inference, args.hf_batch_size, args.force_thinking, args.temperature, args.lora_weights,
                 args.create_resume_file, args.resume_from_file, args.generation_length, args.vllm_gpu_ids,
-                args.vllm_thinking_limit)
+                args.vllm_thinking_limit, args.generate_hdl_output_dir_suffix)
     elif args.mode == "GEN_SFT_JSONL":
         gen_jsonl("SFT", args.input_file, args.output_file)
     elif args.mode == "GEN_RLTF_JSONL":
